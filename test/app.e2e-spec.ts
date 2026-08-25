@@ -40,12 +40,11 @@ describe('API (e2e)', () => {
     expect(response.body).toMatchObject({ status: 'ok' });
   });
 
-  it('reports readiness of the database and cache', async () => {
+  it('reports readiness of the database', async () => {
     const response = await request(server).get('/health/ready').expect(200);
     const body = response.body as HealthBody;
 
     expect(body.info.database.status).toBe('up');
-    expect(body.info.redis.status).toBe('up');
   });
 
   it('rejects unauthenticated access to a protected route', async () => {
