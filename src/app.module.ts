@@ -13,7 +13,6 @@ import { ConfigModule } from './config/config.module';
 import { Env } from './config/env.schema';
 import { HealthModule } from './infrastructure/health/health.module';
 import { PrismaModule } from './infrastructure/prisma/prisma.module';
-import { RedisModule } from './infrastructure/redis/redis.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 
@@ -62,7 +61,6 @@ import { UsersModule } from './modules/users/users.module';
       }),
     }),
     PrismaModule,
-    RedisModule,
     HealthModule,
     AuthModule,
     UsersModule,
