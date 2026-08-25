@@ -16,10 +16,6 @@ export const envSchema = z.object({
   DATABASE_CONNECT_TIMEOUT_MS: z.coerce.number().int().min(0).default(5_000),
   DATABASE_STATEMENT_TIMEOUT_MS: z.coerce.number().int().min(0).default(15_000),
 
-  REDIS_URL: z.string().min(1),
-  REDIS_KEY_PREFIX: z.string().default('np:'),
-  CACHE_TTL_SECONDS: z.coerce.number().int().min(1).default(60),
-
   JWT_ACCESS_SECRET: z.string().min(32),
   JWT_ACCESS_TTL: duration.default('15m'),
   JWT_REFRESH_SECRET: z.string().min(32),
