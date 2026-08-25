@@ -4,7 +4,6 @@ import { ApiTags } from '@nestjs/swagger';
 
 import { Public } from '../../common/decorators/public.decorator';
 import { PrismaHealthIndicator } from './prisma.health';
-import { RedisHealthIndicator } from './redis.health';
 
 @ApiTags('health')
 @Controller({ path: 'health', version: VERSION_NEUTRAL })
@@ -12,7 +11,6 @@ export class HealthController {
   constructor(
     private readonly health: HealthCheckService,
     private readonly database: PrismaHealthIndicator,
-    private readonly redis: RedisHealthIndicator,
     private readonly memory: MemoryHealthIndicator,
   ) {}
 
@@ -28,7 +26,6 @@ export class HealthController {
   ready() {
     return this.health.check([
       () => this.database.isHealthy('database'),
-      () => this.redis.isHealthy('redis'),
       () => this.memory.checkHeap('memory_heap', 512 * 1024 * 1024),
     ]);
   }
