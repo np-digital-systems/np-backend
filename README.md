@@ -36,13 +36,23 @@ src/
   main.ts              Fastify bootstrap: security, compression, versioning, Swagger
   app.module.ts        composition root; global guards, filter and interceptor
   config/              environment schema and validation (zod, fails fast at boot)
-  common/              cross-cutting: decorators, DTOs, filters, guards, interceptors
+  common/              cross-cutting: decorators, DTOs, filters, guards, money, enums
   infrastructure/      technical adapters: prisma, audit, health
   modules/             one folder per bounded context
     auth/              login, refresh rotation, sessions, passwords, RBAC
     users/             users, staff accounts and the sanththa register
     roles/             the role matrix and the permission catalogue
     sponsors/          standing sponsorship of event-type instances
+    settings/          temple, locale and accounting policy
+    financial-years/   opening, closing and freezing a year
+    accounts/          the chart of accounts
+    funds/ projects/   earmarked money and the work it pays for
+    bank-accounts/     where the money sits, and the head it posts through
+    vouchers/          the receipt and payment lifecycle
+    ledger/            posted entries, the cash book and the bank book
+    fixed-deposits/    deposits, renewals and accrued interest
+    assets/            the asset register and depreciation
+    reports/           trial balance, income statement, summaries
   generated/prisma/    Prisma client output; generated, not committed
 test/                  end-to-end specs
 ```
@@ -52,9 +62,8 @@ handle HTTP and nothing else; services hold the domain logic and are the only
 callers of `PrismaService`. Anything shared by two modules moves to `common/`;
 anything that talks to a system outside the process lives in `infrastructure/`.
 
-Adding a context — vouchers, ledger, events, assets, deposits, notifications,
-settings — means adding a folder under `modules/` in that shape and importing it
-in `app.module.ts`.
+Adding a context — events, notifications, the audit-log reader — means adding a
+folder under `modules/` in that shape and importing it in `app.module.ts`.
 
 ## Authentication and authorisation
 
@@ -96,6 +105,71 @@ Roles without `event-sponsor:manage` never receive a sponsor's phone or email �
 frontend states in `lib/event-privacy.ts`. Omitting a field from the markup while
 still sending it in the payload would not be access control.
 
+## Accounting
+
+### Nothing is stored that can be derived
+
+Balances are never written down. An account's balance is its opening position
+plus the year's postings, read through `LedgerQueryService` — the single
+definition of "what the ledger says", which always excludes vouchers that have
+not reached `Posted`. Fund positions, project spend, bank balances and every
+report are computed the same way, so the chart of accounts cannot disagree with
+the entries that produced it.
+
+Opening positions are recorded once, on the ledger head. Creating a bank account
+with an opening balance writes it to the head in the same transaction, so the
+chart of accounts, the bank book, the bank account record and the dashboard
+summary all read the same number.
+
+### The voucher lifecycle
+
+```
+Draft ──submit──▶ Pending Approval ──approve──▶ Approved ──post──▶ Posted
+  │                      │              │                            (frozen)
+  │                      │              └──reject──▶ Rejected ──edit──▶ Draft
+  └──────cancel──────────┴──▶ Cancelled
+```
+
+Only `Posted` touches the ledger. Everything before it is a claim about money,
+not a record of it. Posting writes both legs and the status change in one
+transaction, and the deferred `ledger_balanced` trigger checks the voucher
+balances at commit — a half-written entry cannot reach the books.
+
+A voucher names one head and one amount; the contra side is implied by the
+payment mode. A receipt debits where the money landed and credits the income
+head that explains it; a payment debits the expense head and credits where the
+money came from. Only the contra leg carries `bankAccountId`, which is what lets
+the bank book be a filter over the ledger rather than a parallel list.
+
+Cash posts through the head named in `accounting.cashAccountId`; set it under
+`PATCH /settings/accounting` before the first cash voucher.
+
+**Approval is a second pair of eyes.** You cannot approve a voucher you raised.
+An administrator can lift that with `allowSelfApproval` in the accounting
+settings, for a temple too small to separate the two roles.
+
+References are allocated by a single `INSERT … ON CONFLICT DO UPDATE …
+RETURNING` against `voucher_sequences`, so two cashiers raising a voucher at the
+same moment cannot be handed the same `RV-2026-0001`.
+
+Without `voucher:manage-all`, a user sees and acts on only the vouchers they
+raised.
+
+### Closing a year
+
+Closing snapshots income, expenditure and the voucher count into the row and
+refuses further postings. The figures become frozen rather than live, so a later
+correction cannot silently rewrite a published statement. A year with unposted
+vouchers will not close, and a closed year cannot be reopened.
+
+### Enum values on the wire
+
+Prisma names an enum member `onHold` and stores `on-hold`; the client only ever
+sees the stored spelling. `src/common/enums/wire.ts` translates at the API
+boundary so the published contract matches the frontend's own types rather than
+leaking the ORM's identifier rules. Its spec asserts every value against the
+list the frontend switches on — if the two ever part company, that suite says so.
+
 ## Audit trail
 
 Every mutation in these modules writes to `audit_log` through `AuditService`:
@@ -136,9 +210,25 @@ Introduce a shared store before scaling out horizontally.
 | Register | `POST /users/:id/enrol` `PATCH /users/:id/subscription`, plus `?membersOnly` and `?subscribes` on `GET /users` |
 | Roles | `GET /roles` `GET /roles/permissions` `GET /roles/:code` `PUT /roles/:code/permissions` |
 | Sponsors | `GET /sponsors` `GET /sponsors/directory` `GET /sponsors/:id` `POST /sponsors` `PATCH /sponsors/:id` `DELETE /sponsors/:id` |
+| Settings | `GET /settings` `PATCH /settings/temple` `PATCH /settings/accounting` |
+| Years | `GET /financial-years` `GET /financial-years/current` `POST /financial-years` `POST /financial-years/:id/open` `POST /financial-years/:id/close` |
+| Masters | `/accounts` `/funds` `/projects` `/bank-accounts` — full CRUD, plus `GET /funds/:id/breakdown` |
+| Vouchers | `GET /vouchers` `POST /vouchers` `PATCH /vouchers/:id` and `/submit` `/approve` `/reject` `/post` `/cancel` |
+| Books | `GET /ledger` `GET /cash-book` `GET /bank-book?bankAccountId=` |
+| Holdings | `/fixed-deposits` (+ `/mature` `/close` `/renew`), `/assets` (+ `/dispose`, `/by-category`) |
+| Reports | `GET /reports/trial-balance` `/income-statement` `/accounting-summary` `/finance-summary` |
 
 Users and roles require `user:manage`. Sponsors require `event-sponsor:view` to
-read and `event-sponsor:manage` to write or to see contact details.
+read and `event-sponsor:manage` to write or to see contact details. The
+accounting routes use the catalogue's own permissions — `account:*`, `fund:*`,
+`project:*`, `bank-account:*`, `voucher:*`, `transaction:view`, `cash-book:view`,
+`bank-book:view`, `fixed-deposit:*`, `asset:*` and `report:generate`. Financial
+years read on `transaction:view` and are opened or closed on `settings:manage`;
+the catalogue has no year-specific permission, and closing a year is an
+administrator's act.
+
+Bank account numbers are masked to the last four digits on the way out. The full
+number is stored but never leaves the server.
 
 Member numbers are never supplied by a caller: setting `joinedOn` — through
 `POST /users`, `PATCH /users/:id` or `POST /users/:id/enrol` — makes the database
