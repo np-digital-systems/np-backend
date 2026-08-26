@@ -12,11 +12,11 @@ export function describeInstance(
   switch (frequencyType) {
     case FrequencyType.weekly:
       return `Week ${instanceIdentifier}`;
-    case FrequencyType.monthlyTwice:
+    case FrequencyType.monthly_twice:
       return LUNAR_OCCURRENCE[instanceIdentifier] ?? `Occurrence ${instanceIdentifier}`;
-    case FrequencyType.multiDay:
+    case FrequencyType.multi_day:
       return `Day ${instanceIdentifier}`;
-    case FrequencyType.monthlyOnce:
+    case FrequencyType.monthly_once:
       return 'Monthly occurrence';
     case FrequencyType.annual:
       return 'Annual occurrence';
