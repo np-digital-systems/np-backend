@@ -1,0 +1,647 @@
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+  runtime      = "nodejs"
+  importFileExtension = ""
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  admin
+  accountant
+  cashier
+  user
+
+  @@map("user_role")
+}
+
+enum AccountType {
+  asset
+  liability
+  equity
+  income
+  expense
+
+  @@map("account_type")
+}
+
+enum ProjectStatus {
+  planning
+  active
+  onHold    @map("on-hold")
+  completed
+
+  @@map("project_status")
+}
+
+enum BankAccountType {
+  current
+  savings
+  fixedDeposit @map("fixed-deposit")
+
+  @@map("bank_account_type")
+}
+
+enum VoucherKind {
+  receipt
+  payment
+
+  @@map("voucher_kind")
+}
+
+enum VoucherStatus {
+  Draft
+  PendingApproval @map("Pending Approval")
+  Approved
+  Rejected
+  Posted
+  Cancelled
+
+  @@map("voucher_status")
+}
+
+enum PaymentMode {
+  cash
+  bank
+  cheque
+  online
+
+  @@map("payment_mode")
+}
+
+enum DepositStatus {
+  active
+  matured
+  renewed
+  closed
+
+  @@map("deposit_status")
+}
+
+enum InterestPayout {
+  monthly
+  quarterly
+  onMaturity @map("on-maturity")
+
+  @@map("interest_payout")
+}
+
+enum AssetCategory {
+  landBuilding @map("land-building")
+  jewellery
+  vahanam
+  vessels
+  furniture
+  equipment
+  vehicle
+
+  @@map("asset_category")
+}
+
+enum AssetCondition {
+  good
+  fair
+  needsRepair @map("needs-repair")
+  unusable
+
+  @@map("asset_condition")
+}
+
+enum AssetStatus {
+  inUse       @map("in-use")
+  inStorage   @map("in-storage")
+  underRepair @map("under-repair")
+  disposed
+
+  @@map("asset_status")
+}
+
+enum FrequencyType {
+  weekly
+  monthlyTwice @map("monthly_twice")
+  monthlyOnce  @map("monthly_once")
+  annual
+  multiDay     @map("multi_day")
+
+  @@map("frequency_type")
+}
+
+enum FinancialYearStatus {
+  open
+  closed
+  upcoming
+
+  @@map("financial_year_status")
+}
+
+enum AuditAction {
+  create
+  update
+  delete
+  approve
+  reject
+  post
+  login
+  logout
+  permissionChange @map("permission-change")
+
+  @@map("audit_action")
+}
+
+enum NotificationCategory {
+  Approval
+  Accounting
+  Event
+  Sanththa
+  Banking
+  FixedDeposit       @map("Fixed Deposit")
+  FinancialYear      @map("Financial Year")
+  UserAdministration @map("User Administration")
+  Security
+  System
+
+  @@map("notification_category")
+}
+
+enum NotificationPriority {
+  Information
+  Reminder
+  Warning
+  Critical
+
+  @@map("notification_priority")
+}
+
+model User {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  nameTa       String    @map("name_ta")
+  fullName     String?   @map("full_name")
+  email        String?   @unique(map: "users_email_key") @db.Citext
+  passwordHash String?   @map("password_hash")
+  phone        String?
+  address      String    @default("")
+  role         UserRole  @default(user)
+  isActive     Boolean   @default(true) @map("is_active")
+  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(6)
+  memberNo     String?   @unique(map: "users_member_no_key") @map("member_no")
+  joinedOn     DateTime? @map("joined_on") @db.Date
+  subscribes   Boolean   @default(false)
+  notes        String?
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  sessions            UserSession[]
+  closedFinancialYear FinancialYear[]
+  vouchersCreated     Voucher[]             @relation("VoucherCreatedBy")
+  vouchersDecided     Voucher[]             @relation("VoucherDecidedBy")
+  sponsorships        EventTypeSponsor[]
+  eventsSponsored     Event[]
+  subscriptionsPaid   SanththaPayment[]     @relation("SanththaPayer")
+  subscriptionsTaken  SanththaPayment[]     @relation("SanththaCollector")
+  auditEntries        AuditLog[]
+  notifications       NotificationRecipient[]
+  settingsUpdated     Setting[]
+
+  @@map("users")
+}
+
+model UserSession {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId     String    @map("user_id") @db.Uuid
+  tokenHash  String    @unique(map: "user_sessions_token_hash_key") @map("token_hash")
+  deviceName String    @map("device_name")
+  ipAddress  String    @map("ip_address") @db.Inet
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt], map: "user_sessions_expiry")
+  @@map("user_sessions")
+}
+
+model Role {
+  code        UserRole @id
+  label       String
+  description String
+  isSystem    Boolean  @default(false) @map("is_system")
+  sortOrder   Int      @default(0) @map("sort_order") @db.SmallInt
+
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model PermissionGroup {
+  code        String @id
+  label       String
+  description String
+  sortOrder   Int    @default(0) @map("sort_order") @db.SmallInt
+
+  permissions Permission[]
+
+  @@map("permission_groups")
+}
+
+model Permission {
+  code      String @id
+  groupCode String @map("group_code")
+  label     String
+  sortOrder Int    @default(0) @map("sort_order") @db.SmallInt
+
+  group PermissionGroup  @relation(fields: [groupCode], references: [code])
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleCode       UserRole @map("role_code")
+  permissionCode String   @map("permission_code")
+
+  role       Role       @relation(fields: [roleCode], references: [code], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionCode], references: [code], onDelete: Cascade)
+
+  @@id([roleCode, permissionCode])
+  @@map("role_permissions")
+}
+
+model FinancialYear {
+  id             Int                 @id @default(autoincrement())
+  label          String              @unique(map: "financial_years_label_key")
+  startsOn       DateTime            @map("starts_on") @db.Date
+  endsOn         DateTime            @map("ends_on") @db.Date
+  status         FinancialYearStatus @default(upcoming)
+  isCurrent      Boolean             @default(false) @map("is_current")
+  openingBalance Decimal             @default(0) @map("opening_balance") @db.Decimal(14, 2)
+  income         Decimal?            @db.Decimal(14, 2)
+  expenses       Decimal?            @db.Decimal(14, 2)
+  voucherCount   Int?                @map("voucher_count")
+  closedOn       DateTime?           @map("closed_on") @db.Timestamptz(6)
+  closedBy       String?             @map("closed_by") @db.Uuid
+
+  closedByUser User?             @relation(fields: [closedBy], references: [id])
+  vouchers     Voucher[]
+  sequences    VoucherSequence[]
+
+  @@map("financial_years")
+}
+
+model Account {
+  id             Int         @id @default(autoincrement())
+  code           String      @unique(map: "accounts_code_key")
+  nameTa         String      @map("name_ta")
+  nameEn         String?     @map("name_en")
+  type           AccountType
+  parentId       Int?        @map("parent_id")
+  isPostable     Boolean     @default(true) @map("is_postable")
+  isActive       Boolean     @default(true) @map("is_active")
+  openingBalance Decimal     @default(0) @map("opening_balance") @db.Decimal(14, 2)
+  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  parent       Account?      @relation("AccountTree", fields: [parentId], references: [id])
+  children     Account[]     @relation("AccountTree")
+  bankAccount  BankAccount?
+  vouchers     Voucher[]
+  ledgerLines  LedgerEntry[]
+
+  @@index([parentId], map: "accounts_parent")
+  @@map("accounts")
+}
+
+model Fund {
+  id             Int      @id @default(autoincrement())
+  nameTa         String   @unique(map: "funds_name_ta_key") @map("name_ta")
+  nameEn         String?  @map("name_en")
+  openingBalance Decimal  @default(0) @map("opening_balance") @db.Decimal(14, 2)
+  isActive       Boolean  @default(true) @map("is_active")
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  projects    Project[]
+  vouchers    Voucher[]
+  ledgerLines LedgerEntry[]
+  deposits    FixedDeposit[]
+  assets      Asset[]
+
+  @@map("funds")
+}
+
+model Project {
+  id          Int           @id @default(autoincrement())
+  nameTa      String        @map("name_ta")
+  nameEn      String?       @map("name_en")
+  fundId      Int           @map("fund_id")
+  budget      Decimal?      @db.Decimal(14, 2)
+  startDate   DateTime      @map("start_date") @db.Date
+  targetDate  DateTime?     @map("target_date") @db.Date
+  status      ProjectStatus @default(planning)
+  description String        @default("")
+  isActive    Boolean       @default(true) @map("is_active")
+
+  fund        Fund          @relation(fields: [fundId], references: [id])
+  vouchers    Voucher[]
+  ledgerLines LedgerEntry[]
+
+  @@index([fundId, status], map: "projects_fund")
+  @@map("projects")
+}
+
+model BankAccount {
+  id              Int             @id @default(autoincrement())
+  label           String
+  bankName        String          @map("bank_name")
+  branch          String
+  accountNumber   String          @map("account_number")
+  type            BankAccountType
+  openingBalance  Decimal         @default(0) @map("opening_balance") @db.Decimal(14, 2)
+  openedOn        DateTime        @map("opened_on") @db.Date
+  isActive        Boolean         @default(true) @map("is_active")
+  ledgerAccountId Int             @unique(map: "bank_accounts_ledger_account_id_key") @map("ledger_account_id")
+
+  ledgerAccount Account        @relation(fields: [ledgerAccountId], references: [id])
+  vouchers      Voucher[]
+  ledgerLines   LedgerEntry[]
+  deposits      FixedDeposit[]
+
+  @@unique([bankName, accountNumber], map: "bank_account_number")
+  @@map("bank_accounts")
+}
+
+model Voucher {
+  id              BigInt        @id @default(autoincrement())
+  ref             String        @unique(map: "vouchers_ref_key")
+  kind            VoucherKind
+  financialYearId Int           @map("financial_year_id")
+  date            DateTime      @db.Date
+  description     String
+  amount          Decimal       @db.Decimal(14, 2)
+  accountId       Int           @map("account_id")
+  fundId          Int           @map("fund_id")
+  projectId       Int?          @map("project_id")
+  mode            PaymentMode
+  bankAccountId   Int?          @map("bank_account_id")
+  chequeNo        String?       @map("cheque_no")
+  party           String
+  manualVoucherNo String?       @map("manual_voucher_no")
+  eventRef        String?       @map("event_ref")
+  eventTypeId     Int?          @map("event_type_id")
+  eventId         Int?          @map("event_id")
+  status          VoucherStatus @default(Draft)
+  notes           String?
+  createdBy       String        @map("created_by") @db.Uuid
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  submittedAt     DateTime?     @map("submitted_at") @db.Timestamptz(6)
+  decidedBy       String?       @map("decided_by") @db.Uuid
+  decidedAt       DateTime?     @map("decided_at") @db.Timestamptz(6)
+  rejectionReason String?       @map("rejection_reason")
+  postedAt        DateTime?     @map("posted_at") @db.Timestamptz(6)
+
+  financialYear   FinancialYear     @relation(fields: [financialYearId], references: [id])
+  account         Account           @relation(fields: [accountId], references: [id])
+  fund            Fund              @relation(fields: [fundId], references: [id])
+  project         Project?          @relation(fields: [projectId], references: [id])
+  bankAccount     BankAccount?      @relation(fields: [bankAccountId], references: [id])
+  eventType       EventType?        @relation(fields: [eventTypeId], references: [id])
+  event           Event?            @relation(fields: [eventId], references: [id])
+  createdByUser   User              @relation("VoucherCreatedBy", fields: [createdBy], references: [id])
+  decidedByUser   User?             @relation("VoucherDecidedBy", fields: [decidedBy], references: [id])
+  ledgerEntries   LedgerEntry[]
+  sanththaPayment SanththaPayment?
+
+  @@index([financialYearId, date(sort: Desc)], map: "vouchers_year_date")
+  @@index([kind, date(sort: Desc)], map: "vouchers_kind_date")
+  @@index([party(ops: raw("gin_trgm_ops"))], map: "vouchers_party", type: Gin)
+  @@map("vouchers")
+}
+
+model VoucherSequence {
+  financialYearId Int         @map("financial_year_id")
+  kind            VoucherKind
+  prefix          String
+  nextNo          Int         @default(1) @map("next_no")
+
+  financialYear FinancialYear @relation(fields: [financialYearId], references: [id])
+
+  @@id([financialYearId, kind])
+  @@map("voucher_sequences")
+}
+
+model LedgerEntry {
+  id            BigInt   @id @default(autoincrement())
+  voucherId     BigInt   @map("voucher_id")
+  lineNo        Int      @map("line_no") @db.SmallInt
+  date          DateTime @db.Date
+  accountId     Int      @map("account_id")
+  fundId        Int      @map("fund_id")
+  projectId     Int?     @map("project_id")
+  debit         Decimal? @db.Decimal(14, 2)
+  credit        Decimal? @db.Decimal(14, 2)
+  bankAccountId Int?     @map("bank_account_id")
+
+  voucher     Voucher      @relation(fields: [voucherId], references: [id])
+  account     Account      @relation(fields: [accountId], references: [id])
+  fund        Fund         @relation(fields: [fundId], references: [id])
+  project     Project?     @relation(fields: [projectId], references: [id])
+  bankAccount BankAccount? @relation(fields: [bankAccountId], references: [id])
+
+  @@unique([voucherId, lineNo], map: "voucher_line")
+  @@index([accountId, date], map: "ledger_account_date")
+  @@index([fundId, date], map: "ledger_fund_date")
+  @@index([date], map: "ledger_date")
+  @@map("ledger_entries")
+}
+
+model FixedDeposit {
+  id             Int            @id @default(autoincrement())
+  certificateNo  String         @unique(map: "fixed_deposits_certificate_no_key") @map("certificate_no")
+  bankName       String         @map("bank_name")
+  branch         String
+  principal      Decimal        @db.Decimal(14, 2)
+  interestRate   Decimal        @map("interest_rate") @db.Decimal(5, 2)
+  placedOn       DateTime       @map("placed_on") @db.Date
+  maturesOn      DateTime       @map("matures_on") @db.Date
+  tenureMonths   Int            @map("tenure_months") @db.SmallInt
+  interestPayout InterestPayout @map("interest_payout")
+  fundId         Int            @map("fund_id")
+  status         DepositStatus  @default(active)
+  renewedFromId  Int?           @map("renewed_from_id")
+  bankAccountId  Int?           @map("bank_account_id")
+  notes          String?
+
+  fund        Fund           @relation(fields: [fundId], references: [id])
+  bankAccount BankAccount?   @relation(fields: [bankAccountId], references: [id])
+  renewedFrom FixedDeposit?  @relation("DepositRenewal", fields: [renewedFromId], references: [id])
+  renewals    FixedDeposit[] @relation("DepositRenewal")
+
+  @@index([status, maturesOn], map: "deposits_maturing")
+  @@map("fixed_deposits")
+}
+
+model Asset {
+  id               Int            @id @default(autoincrement())
+  tag              String         @unique(map: "assets_tag_key")
+  nameTa           String         @map("name_ta")
+  nameEn           String?        @map("name_en")
+  category         AssetCategory
+  acquiredOn       DateTime       @map("acquired_on") @db.Date
+  cost             Decimal        @db.Decimal(14, 2)
+  depreciationRate Decimal        @default(0) @map("depreciation_rate") @db.Decimal(5, 2)
+  location         String
+  condition        AssetCondition @default(good)
+  status           AssetStatus    @default(inUse)
+  fundId           Int            @map("fund_id")
+  disposedOn       DateTime?      @map("disposed_on") @db.Date
+  disposalValue    Decimal?       @map("disposal_value") @db.Decimal(14, 2)
+  notes            String?
+
+  fund Fund @relation(fields: [fundId], references: [id])
+
+  @@index([category, status], map: "assets_category")
+  @@map("assets")
+}
+
+model EventType {
+  id            Int           @id @default(autoincrement())
+  nameTa        String        @unique(map: "event_types_name_ta_key") @map("name_ta")
+  nameEn        String?       @map("name_en")
+  frequencyType FrequencyType @map("frequency_type")
+  noOfInstances Int           @default(1) @map("no_of_instances") @db.SmallInt
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  sponsors EventTypeSponsor[]
+  events   Event[]
+  vouchers Voucher[]
+
+  @@map("event_types")
+}
+
+model EventTypeSponsor {
+  id                 Int      @id @default(autoincrement())
+  eventTypeId        Int      @map("event_type_id")
+  instanceIdentifier Int      @map("instance_identifier") @db.SmallInt
+  customInstanceName String?  @map("custom_instance_name")
+  userId             String   @map("user_id") @db.Uuid
+  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  eventType EventType @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id])
+
+  @@unique([eventTypeId, instanceIdentifier], map: "one_sponsor_per_slot")
+  @@index([userId], map: "sponsors_by_user")
+  @@map("event_type_sponsors")
+}
+
+model Event {
+  id                 Int       @id @default(autoincrement())
+  eventTypeId        Int       @map("event_type_id")
+  instanceIdentifier Int       @map("instance_identifier") @db.SmallInt
+  customInstanceName String?   @map("custom_instance_name")
+  scheduledDate      DateTime  @map("scheduled_date") @db.Date
+  startTime          DateTime  @map("start_time") @db.Time(6)
+  endTime            DateTime? @map("end_time") @db.Time(6)
+  sponsorId          String?   @map("sponsor_id") @db.Uuid
+  notes              String?
+  isCompleted        Boolean   @default(false) @map("is_completed")
+  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  eventType EventType @relation(fields: [eventTypeId], references: [id])
+  sponsor   User?     @relation(fields: [sponsorId], references: [id])
+  vouchers  Voucher[]
+
+  @@index([scheduledDate], map: "events_calendar")
+  @@index([sponsorId], map: "events_sponsor")
+  @@map("events")
+}
+
+model SanththaPayment {
+  id               Int         @id @default(autoincrement())
+  userId           String      @map("user_id") @db.Uuid
+  year             Int
+  amount           Decimal     @db.Decimal(12, 2)
+  paidOn           DateTime    @map("paid_on") @db.Date
+  receiptVoucherId BigInt?     @unique(map: "one_payment_per_receipt") @map("receipt_voucher_id")
+  mode             PaymentMode
+  collectedBy      String      @map("collected_by") @db.Uuid
+  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user           User     @relation("SanththaPayer", fields: [userId], references: [id])
+  collectedByUser User    @relation("SanththaCollector", fields: [collectedBy], references: [id])
+  receiptVoucher Voucher? @relation(fields: [receiptVoucherId], references: [id])
+
+  @@unique([userId, year], map: "one_payment_per_member_per_year")
+  @@index([year], map: "payments_year")
+  @@index([userId], map: "payments_member")
+  @@map("sanththa_payments")
+}
+
+model AuditLog {
+  id        BigInt      @id @default(autoincrement())
+  at        DateTime    @default(now()) @db.Timestamptz(6)
+  actorId   String?     @map("actor_id") @db.Uuid
+  actorName String      @map("actor_name")
+  actorRole UserRole    @map("actor_role")
+  action    AuditAction
+  entity    String
+  entityRef String?     @map("entity_ref")
+  summary   String
+  ipAddress String      @map("ip_address") @db.Inet
+  diff      Json?
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([at(sort: Desc)], map: "audit_recent")
+  @@index([actorId, at(sort: Desc)], map: "audit_actor")
+  @@index([entity, entityRef], map: "audit_entity")
+  @@map("audit_log")
+}
+
+model Notification {
+  id          BigInt               @id @default(autoincrement())
+  category    NotificationCategory
+  priority    NotificationPriority @default(Information)
+  title       String
+  message     String
+  entityType  String?              @map("entity_type")
+  entityRef   String?              @map("entity_ref")
+  actionLabel String?              @map("action_label")
+  actionHref  String?              @map("action_href")
+  meta        Json?
+  dismissible Boolean              @default(true)
+  createdAt   DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  recipients NotificationRecipient[]
+
+  @@index([createdAt(sort: Desc)], map: "notifications_recent")
+  @@map("notifications")
+}
+
+model NotificationRecipient {
+  notificationId BigInt    @map("notification_id")
+  userId         String    @map("user_id") @db.Uuid
+  readAt         DateTime? @map("read_at") @db.Timestamptz(6)
+  dismissedAt    DateTime? @map("dismissed_at") @db.Timestamptz(6)
+
+  notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([notificationId, userId])
+  @@map("notification_recipients")
+}
+
+model Setting {
+  key       String   @id
+  value     Json
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  updatedBy String?  @map("updated_by") @db.Uuid
+
+  updatedByUser User? @relation(fields: [updatedBy], references: [id])
+
+  @@map("settings")
+}
