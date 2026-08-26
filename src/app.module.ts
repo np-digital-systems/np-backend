@@ -12,8 +12,11 @@ import { TimeoutInterceptor } from './common/interceptors/timeout.interceptor';
 import { ConfigModule } from './config/config.module';
 import { Env } from './config/env.schema';
 import { HealthModule } from './infrastructure/health/health.module';
+import { AuditModule } from './infrastructure/audit/audit.module';
 import { PrismaModule } from './infrastructure/prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { RolesModule } from './modules/roles/roles.module';
+import { SponsorsModule } from './modules/sponsors/sponsors.module';
 import { UsersModule } from './modules/users/users.module';
 
 @Module({
@@ -61,9 +64,12 @@ import { UsersModule } from './modules/users/users.module';
       }),
     }),
     PrismaModule,
+    AuditModule,
     HealthModule,
     AuthModule,
     UsersModule,
+    RolesModule,
+    SponsorsModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },

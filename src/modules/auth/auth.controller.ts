@@ -1,15 +1,29 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Req,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { FastifyRequest } from 'fastify';
 
+import { Actor } from '../../common/decorators/actor.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Public } from '../../common/decorators/public.decorator';
-import type { AuthenticatedUser } from '../../common/types/authenticated-user';
+import type { ActorContext, AuthenticatedUser } from '../../common/types/authenticated-user';
 import { AuthService } from './auth.service';
 import { AuthTokensDto, AuthUserDto } from './dto/auth-response.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
+import { SessionDto } from './dto/session.dto';
 import { PermissionsService } from './permissions.service';
 import { UsersService } from '../users/users.service';
 
@@ -44,16 +58,43 @@ export class AuthController {
   @Post('logout')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Revoke the current session' })
-  logout(@CurrentUser() user: AuthenticatedUser): Promise<void> {
-    return this.auth.logout(user.sessionId);
+  logout(@Actor() context: ActorContext): Promise<void> {
+    return this.auth.logout(context);
   }
 
   @ApiBearerAuth()
   @Post('logout-all')
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({ summary: 'Revoke every session belonging to the signed-in user' })
-  logoutAll(@CurrentUser() user: AuthenticatedUser): Promise<void> {
-    return this.auth.logoutAll(user.id);
+  logoutAll(@Actor() context: ActorContext): Promise<void> {
+    return this.auth.logoutAll(context);
+  }
+
+  @ApiBearerAuth()
+  @Get('sessions')
+  @ApiOperation({ summary: 'List the signed-in user’s active sessions' })
+  sessions(@Actor() context: ActorContext): Promise<SessionDto[]> {
+    return this.auth.listSessions(context);
+  }
+
+  @ApiBearerAuth()
+  @Delete('sessions/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Revoke one of the signed-in user’s sessions' })
+  revokeSession(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Actor() context: ActorContext,
+  ): Promise<void> {
+    return this.auth.revokeSession(id, context);
+  }
+
+  @ApiBearerAuth()
+  @Throttle({ default: { limit: 5, ttl: 300_000 } })
+  @Post('change-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Change your own password; every other session is revoked' })
+  changePassword(@Body() dto: ChangePasswordDto, @Actor() context: ActorContext): Promise<void> {
+    return this.auth.changePassword(dto, context);
   }
 
   @ApiBearerAuth()

@@ -48,13 +48,23 @@ describe('TokenService', () => {
   });
 
   it('signs an access token carrying the subject, role and session', async () => {
-    const token = await service.signAccessToken({ sub: 'user-1', role: 'admin', sid: 'session-1' });
+    const token = await service.signAccessToken({
+      sub: 'user-1',
+      name: 'Test User',
+      role: 'admin',
+      sid: 'session-1',
+    });
     const [, payload] = token.split('.');
     const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString()) as Record<
       string,
       unknown
     >;
 
-    expect(decoded).toMatchObject({ sub: 'user-1', role: 'admin', sid: 'session-1' });
+    expect(decoded).toMatchObject({
+      sub: 'user-1',
+      name: 'Test User',
+      role: 'admin',
+      sid: 'session-1',
+    });
   });
 });

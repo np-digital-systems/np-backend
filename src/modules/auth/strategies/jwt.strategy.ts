@@ -23,6 +23,6 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
   validate(payload: AccessTokenPayload): AuthenticatedUser {
     if (!payload.sub || !payload.sid) throw new UnauthorizedException();
 
-    return { id: payload.sub, role: payload.role, sessionId: payload.sid };
+    return { id: payload.sub, name: payload.name, role: payload.role, sessionId: payload.sid };
   }
 }
