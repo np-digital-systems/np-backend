@@ -27,7 +27,7 @@ export class SanththaController {
   ) {}
 
   @Get('register')
-  @RequirePermissions('transaction:view')
+  @RequirePermissions('contribution:view')
   @ApiOperation({
     summary: 'The sanththa register',
     description:
@@ -41,13 +41,13 @@ export class SanththaController {
   }
 
   @Get('summary')
-  @RequirePermissions('transaction:view')
+  @RequirePermissions('contribution:view')
   summary(@Query('year') year?: string): Promise<SanththaSummaryDto> {
     return this.sanththa.summary(year ? Number(year) : undefined);
   }
 
   @Get('payments')
-  @RequirePermissions('transaction:view')
+  @RequirePermissions('contribution:view')
   async payments(
     @Query() query: QueryPaymentsDto,
     @CurrentUser() user: AuthenticatedUser,
@@ -56,7 +56,7 @@ export class SanththaController {
   }
 
   @Post('payments')
-  @RequirePermissions('transaction:create')
+  @RequirePermissions('contribution:record')
   @ApiOperation({ summary: 'Record a year’s subscription; one per member per year' })
   record(
     @Body() dto: RecordPaymentDto,
@@ -66,6 +66,6 @@ export class SanththaController {
   }
 
   private async canSeeContact(user: AuthenticatedUser): Promise<boolean> {
-    return (await this.permissions.forRole(user.role)).has('user:manage');
+    return (await this.permissions.forRole(user.role)).has('contribution:manage');
   }
 }
