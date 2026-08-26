@@ -3,6 +3,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { PageDto, PageMetaDto } from '../../common/dto/page.dto';
 import { toRupees, toRupeesOrNull } from '../../common/money/money';
 import { Prisma } from '../../generated/prisma/client';
+import { VoucherStatusWire } from '../../common/enums/wire';
 import { VoucherStatus } from '../../generated/prisma/enums';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { toAccountRef } from '../accounts/accounts.service';
@@ -61,7 +62,7 @@ export class LedgerService {
   async cashBook(query: QueryBookDto): Promise<BookDto> {
     const cashAccountId = await this.settings.cashAccountId();
 
-    return this.book({ accountId: cashAccountId }, query);
+    return this.book({ accountId: cashAccountId }, query, await this.openingOf(cashAccountId));
   }
 
   /** The bank book for one account: every posted movement through it. */
@@ -75,8 +76,24 @@ export class LedgerService {
     return this.book(
       { bankAccountId: query.bankAccountId },
       query,
-      toRupees(account.openingBalance),
+      await this.openingOf(account.ledgerAccountId),
     );
+  }
+
+  /**
+   * A book opens where its ledger head opens.
+   *
+   * The head is the one place an opening position is recorded, so the chart of
+   * accounts, the books and the balances on a bank account cannot report
+   * different figures for the same money.
+   */
+  private async openingOf(accountId: number): Promise<number> {
+    const account = await this.prisma.account.findUnique({
+      where: { id: accountId },
+      select: { openingBalance: true },
+    });
+
+    return toRupees(account?.openingBalance);
   }
 
   /**
@@ -191,7 +208,7 @@ export class LedgerService {
       credit: toRupeesOrNull(row.credit),
       mode: row.voucher.mode,
       bankAccountId: row.bankAccountId,
-      status: row.voucher.status,
+      status: VoucherStatusWire.toWire(row.voucher.status),
       account: toAccountRef(row.account),
       fund: toFundRef(row.fund),
       project: row.project ? toProjectRef(row.project) : null,

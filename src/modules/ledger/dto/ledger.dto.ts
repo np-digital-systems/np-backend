@@ -3,7 +3,9 @@ import { Type } from 'class-transformer';
 import { IsDateString, IsInt, IsOptional, Min } from 'class-validator';
 
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
-import { PaymentMode, VoucherStatus } from '../../../generated/prisma/enums';
+import { VoucherStatusWire } from '../../../common/enums/wire';
+import type { WireVoucherStatus } from '../../../common/enums/wire';
+import { PaymentMode } from '../../../generated/prisma/enums';
 import { AccountRefDto } from '../../accounts/dto/account.dto';
 import { FundRefDto } from '../../funds/dto/fund.dto';
 import { ProjectRefDto } from '../../projects/dto/project.dto';
@@ -21,7 +23,7 @@ export class LedgerRecordDto {
   @ApiProperty({ nullable: true }) credit!: number | null;
   @ApiProperty({ enum: PaymentMode }) mode!: PaymentMode;
   @ApiProperty({ nullable: true }) bankAccountId!: number | null;
-  @ApiProperty({ enum: VoucherStatus }) status!: VoucherStatus;
+  @ApiProperty({ enum: VoucherStatusWire.values }) status!: WireVoucherStatus;
   @ApiProperty({ type: AccountRefDto }) account!: AccountRefDto;
   @ApiProperty({ type: FundRefDto }) fund!: FundRefDto;
   @ApiProperty({ type: ProjectRefDto, nullable: true }) project!: ProjectRefDto | null;
