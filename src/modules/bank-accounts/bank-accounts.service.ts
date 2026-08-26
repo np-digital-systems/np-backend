@@ -9,6 +9,7 @@ import { naturalBalance } from '../../common/money/account-direction';
 import { toRupees } from '../../common/money/money';
 import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
+import { BankAccountTypeWire } from '../../common/enums/wire';
 import { AccountType } from '../../generated/prisma/enums';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
@@ -26,7 +27,12 @@ type BankAccountRow = Prisma.BankAccountGetPayload<Record<string, never>>;
 export function toBankAccountRef(
   account: Pick<BankAccountRow, 'id' | 'label' | 'type' | 'isActive'>,
 ): BankAccountRefDto {
-  return { id: account.id, label: account.label, type: account.type, isActive: account.isActive };
+  return {
+    id: account.id,
+    label: account.label,
+    type: BankAccountTypeWire.toWire(account.type),
+    isActive: account.isActive,
+  };
 }
 
 /** Last four digits only; enough to recognise the account, useless to misuse. */
@@ -92,17 +98,50 @@ export class BankAccountsService {
       throw new BadRequestException('That head is a grouping account and takes no entries');
     }
 
-    const account = await this.prisma.bankAccount.create({
-      data: {
-        label: dto.label,
-        bankName: dto.bankName,
-        branch: dto.branch,
-        accountNumber: dto.accountNumber,
-        type: dto.type,
-        openingBalance: dto.openingBalance ?? 0,
-        openedOn: new Date(dto.openedOn),
-        ledgerAccountId: dto.ledgerAccountId,
-      },
+    const inUse = await this.prisma.bankAccount.findUnique({
+      where: { ledgerAccountId: dto.ledgerAccountId },
+      select: { label: true },
+    });
+
+    if (inUse) {
+      throw new ConflictException(`${ledgerAccount.code} already posts for ${inUse.label}`);
+    }
+
+    const openingBalance = dto.openingBalance ?? 0;
+
+    /*
+     * The opening position is recorded once, on the ledger head, and mirrored
+     * here for the certificate. Writing both in one transaction is what keeps
+     * the chart of accounts and the bank book from ever disagreeing.
+     */
+    const account = await this.prisma.$transaction(async (tx) => {
+      if (openingBalance !== 0) {
+        const entries = await tx.ledgerEntry.count({ where: { accountId: dto.ledgerAccountId } });
+
+        if (entries > 0) {
+          throw new ConflictException(
+            `${ledgerAccount.code} already has posted entries; its opening balance is settled`,
+          );
+        }
+
+        await tx.account.update({
+          where: { id: dto.ledgerAccountId },
+          data: { openingBalance },
+        });
+      }
+
+      return tx.bankAccount.create({
+        data: {
+          label: dto.label,
+          bankName: dto.bankName,
+          branch: dto.branch,
+          accountNumber: dto.accountNumber,
+          type: BankAccountTypeWire.toPrisma(dto.type),
+          openingBalance,
+          openedOn: new Date(dto.openedOn),
+          ledgerAccountId: dto.ledgerAccountId,
+        },
+      });
     });
 
     await this.audit.record(context, {
@@ -125,13 +164,20 @@ export class BankAccountsService {
     if (!before) throw new NotFoundException(`Bank account ${id} was not found`);
 
     if (dto.openingBalance !== undefined) {
-      const entries = await this.prisma.ledgerEntry.count({ where: { bankAccountId: id } });
+      const entries = await this.prisma.ledgerEntry.count({
+        where: { OR: [{ bankAccountId: id }, { accountId: before.ledgerAccountId }] },
+      });
 
       if (entries > 0) {
         throw new ConflictException(
           'This account has posted movements; its opening balance is settled',
         );
       }
+
+      await this.prisma.account.update({
+        where: { id: before.ledgerAccountId },
+        data: { openingBalance: dto.openingBalance },
+      });
     }
 
     const account = await this.prisma.bankAccount.update({
@@ -140,7 +186,7 @@ export class BankAccountsService {
         label: dto.label,
         bankName: dto.bankName,
         branch: dto.branch,
-        type: dto.type,
+        type: BankAccountTypeWire.toPrismaOptional(dto.type),
         openingBalance: dto.openingBalance,
         openedOn: dto.openedOn ? new Date(dto.openedOn) : undefined,
         isActive: dto.isActive,
@@ -168,9 +214,10 @@ export class BankAccountsService {
   private toRecord(
     account: BankAccountRow,
     sides: { debit: number; credit: number; count: number } | undefined,
+    ledgerOpening?: number,
   ): BankAccountRecordDto {
     const totals = sides ?? LedgerQueryService.empty();
-    const opening = toRupees(account.openingBalance);
+    const opening = ledgerOpening ?? toRupees(account.openingBalance);
 
     return {
       ...toBankAccountRef(account),

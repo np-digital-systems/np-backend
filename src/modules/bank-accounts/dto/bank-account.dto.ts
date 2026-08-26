@@ -3,7 +3,7 @@ import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
   IsDateString,
-  IsEnum,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -13,12 +13,13 @@ import {
   Min,
 } from 'class-validator';
 
-import { BankAccountType } from '../../../generated/prisma/enums';
+import { BankAccountTypeWire } from '../../../common/enums/wire';
+import type { WireBankAccountType } from '../../../common/enums/wire';
 
 export class BankAccountRefDto {
   @ApiProperty() id!: number;
   @ApiProperty() label!: string;
-  @ApiProperty({ enum: BankAccountType }) type!: BankAccountType;
+  @ApiProperty({ enum: BankAccountTypeWire.values }) type!: WireBankAccountType;
   @ApiProperty() isActive!: boolean;
 }
 
@@ -61,9 +62,9 @@ export class CreateBankAccountDto {
   @Matches(/^[0-9-]{6,34}$/, { message: 'accountNumber must be 6 to 34 digits or dashes' })
   accountNumber!: string;
 
-  @ApiProperty({ enum: BankAccountType })
-  @IsEnum(BankAccountType)
-  type!: BankAccountType;
+  @ApiProperty({ enum: BankAccountTypeWire.values })
+  @IsIn(BankAccountTypeWire.values)
+  type!: WireBankAccountType;
 
   @ApiPropertyOptional()
   @IsOptional()
