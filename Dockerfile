@@ -1,4 +1,8 @@
-FROM node:22-bookworm-slim AS base
+# Node 24 rather than 22, because the lockfile is written by npm 11 and the
+# npm 10 that ships with Node 22 cannot read it — it reports chokidar and
+# readdirp as missing and stops. Keep this in step with the npm that generates
+# the lockfile; package.json records the floor.
+FROM node:24-bookworm-slim AS base
 ENV PNPM_HOME=/usr/local/bin
 WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends openssl tini \
@@ -6,7 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl tini \
 
 FROM base AS deps
 COPY package*.json ./
-RUN npm ci
+# --no-audit and --no-fund keep the build log about the build. The retries are
+# for the registry, which is not always reachable first time from a builder.
+RUN npm ci --no-audit --no-fund --fetch-retries 5
 
 FROM deps AS build
 COPY tsconfig*.json nest-cli.json prisma.config.ts ./
