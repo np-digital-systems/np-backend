@@ -3,6 +3,7 @@ import { Transform, Type } from 'class-transformer';
 import {
   IsDateString,
   IsEnum,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -14,7 +15,9 @@ import {
 } from 'class-validator';
 
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
-import { PaymentMode, VoucherKind, VoucherStatus } from '../../../generated/prisma/enums';
+import { VoucherStatusWire } from '../../../common/enums/wire';
+import type { WireVoucherStatus } from '../../../common/enums/wire';
+import { PaymentMode, VoucherKind } from '../../../generated/prisma/enums';
 import { AccountRefDto } from '../../accounts/dto/account.dto';
 import { BankAccountRefDto } from '../../bank-accounts/dto/bank-account.dto';
 import { FundRefDto } from '../../funds/dto/fund.dto';
@@ -41,7 +44,7 @@ export class VoucherDto {
   @ApiProperty({ nullable: true }) chequeNo!: string | null;
   @ApiProperty({ description: 'Payer for a receipt, payee for a payment' }) party!: string;
   @ApiProperty({ nullable: true }) eventRef!: string | null;
-  @ApiProperty({ enum: VoucherStatus }) status!: VoucherStatus;
+  @ApiProperty({ enum: VoucherStatusWire.values }) status!: WireVoucherStatus;
   @ApiProperty({ nullable: true }) notes!: string | null;
   @ApiProperty({ type: VoucherActorDto }) createdBy!: VoucherActorDto;
   @ApiProperty() createdAt!: Date;
@@ -169,10 +172,10 @@ export class QueryVouchersDto extends PaginationQueryDto {
   @IsEnum(VoucherKind)
   kind?: VoucherKind;
 
-  @ApiPropertyOptional({ enum: VoucherStatus })
+  @ApiPropertyOptional({ enum: VoucherStatusWire.values })
   @IsOptional()
-  @IsEnum(VoucherStatus)
-  status?: VoucherStatus;
+  @IsIn(VoucherStatusWire.values)
+  status?: WireVoucherStatus;
 
   @ApiPropertyOptional()
   @IsOptional()

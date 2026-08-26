@@ -124,18 +124,34 @@ export class ReportsService {
         _count: { _all: true },
         _sum: { amount: true },
       }),
-      this.prisma.bankAccount.findMany({ select: { ledgerAccountId: true, openingBalance: true } }),
+      this.prisma.bankAccount.findMany({ select: { ledgerAccountId: true } }),
       this.settings.accounting().then((settings) => settings.cashAccountId),
     ]);
 
-    const balanceOf = (accountId: number, opening = 0) => {
+    // Opening positions come from the ledger heads, the same place the chart of
+    // accounts and the books read them, so no two screens can disagree.
+    const heads = await this.prisma.account.findMany({
+      where: {
+        id: {
+          in: [
+            ...bankAccounts.map((account) => account.ledgerAccountId),
+            ...(cashAccountId === null ? [] : [cashAccountId]),
+          ],
+        },
+      },
+      select: { id: true, openingBalance: true },
+    });
+
+    const openingOf = new Map(heads.map((head) => [head.id, toRupees(head.openingBalance)]));
+
+    const balanceOf = (accountId: number) => {
       const totals = sides.get(accountId) ?? LedgerQueryService.empty();
 
-      return opening + totals.debit - totals.credit;
+      return (openingOf.get(accountId) ?? 0) + totals.debit - totals.credit;
     };
 
     const bankBalance = bankAccounts.reduce(
-      (sum, account) => sum + balanceOf(account.ledgerAccountId, toRupees(account.openingBalance)),
+      (sum, account) => sum + balanceOf(account.ledgerAccountId),
       0,
     );
 

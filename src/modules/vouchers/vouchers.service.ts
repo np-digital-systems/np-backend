@@ -10,6 +10,7 @@ import { PageDto, PageMetaDto } from '../../common/dto/page.dto';
 import { toRupees } from '../../common/money/money';
 import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
+import { VoucherStatusWire } from '../../common/enums/wire';
 import { AccountType, PaymentMode, VoucherKind, VoucherStatus } from '../../generated/prisma/enums';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
@@ -62,7 +63,7 @@ export class VouchersService {
   ): Promise<PageDto<VoucherRecordDto>> {
     const where: Prisma.VoucherWhereInput = {
       kind: query.kind,
-      status: query.status,
+      status: VoucherStatusWire.toPrismaOptional(query.status),
       financialYearId: query.financialYearId,
       fundId: query.fundId,
       accountId: query.accountId,
@@ -474,7 +475,8 @@ export class VouchersService {
   private assertStatusIn(voucher: VoucherRow, allowed: VoucherStatus[], verb: string): void {
     if (!allowed.includes(voucher.status)) {
       throw new ConflictException(
-        `${voucher.ref} is ${voucher.status} and cannot be ${verb}; allowed from ${allowed.join(' or ')}`,
+        `${voucher.ref} is ${VoucherStatusWire.toWire(voucher.status)} and cannot be ${verb}; ` +
+          `allowed from ${allowed.map((status) => VoucherStatusWire.toWire(status)).join(' or ')}`,
       );
     }
   }
@@ -516,7 +518,7 @@ export class VouchersService {
       chequeNo: voucher.chequeNo,
       party: voucher.party,
       eventRef: voucher.eventRef,
-      status: voucher.status,
+      status: VoucherStatusWire.toWire(voucher.status),
       notes: voucher.notes,
       createdBy: actor(voucher.createdByUser)!,
       createdAt: voucher.createdAt,
