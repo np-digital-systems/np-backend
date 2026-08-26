@@ -8,6 +8,7 @@ import {
 import { toRupees, toRupeesOrNull } from '../../common/money/money';
 import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
+import { AssetCategoryWire, AssetConditionWire, AssetStatusWire } from '../../common/enums/wire';
 import { AssetStatus } from '../../generated/prisma/enums';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
@@ -33,9 +34,11 @@ export class AssetsService {
   async findMany(query: QueryAssetsDto): Promise<AssetRecordDto[]> {
     const assets = await this.prisma.asset.findMany({
       where: {
-        category: query.category,
-        status: query.heldOnly ? { not: AssetStatus.disposed } : query.status,
-        condition: query.condition,
+        category: AssetCategoryWire.toPrismaOptional(query.category),
+        status: query.heldOnly
+          ? { not: AssetStatus.disposed }
+          : AssetStatusWire.toPrismaOptional(query.status),
+        condition: AssetConditionWire.toPrismaOptional(query.condition),
         fundId: query.fundId,
       },
       include: { fund: true },
@@ -94,13 +97,13 @@ export class AssetsService {
         tag: dto.tag,
         nameTa: dto.nameTa,
         nameEn: dto.nameEn,
-        category: dto.category,
+        category: AssetCategoryWire.toPrisma(dto.category),
         acquiredOn: new Date(dto.acquiredOn),
         cost: dto.cost,
         depreciationRate: dto.depreciationRate ?? 0,
         location: dto.location,
-        condition: dto.condition,
-        status: dto.status,
+        condition: AssetConditionWire.toPrismaOptional(dto.condition),
+        status: AssetStatusWire.toPrismaOptional(dto.status),
         fundId: dto.fundId,
         notes: dto.notes,
       },
@@ -114,7 +117,7 @@ export class AssetsService {
       summary: `Capitalised ${asset.nameTa} (${asset.tag}) at ${toRupees(asset.cost)}`,
     });
 
-    return this.toRecord(asset);
+    return this.findOneOrFail(asset.id);
   }
 
   async update(id: number, dto: UpdateAssetDto, context: ActorContext): Promise<AssetRecordDto> {
@@ -125,7 +128,7 @@ export class AssetsService {
       throw new ConflictException(`${before.tag} has been disposed of and is now a closed record`);
     }
 
-    if (dto.status === AssetStatus.disposed) {
+    if (dto.status === 'disposed') {
       throw new BadRequestException('Use POST /assets/:id/dispose so the disposal is dated');
     }
 
@@ -136,13 +139,13 @@ export class AssetsService {
       data: {
         nameTa: dto.nameTa,
         nameEn: dto.nameEn,
-        category: dto.category,
+        category: AssetCategoryWire.toPrismaOptional(dto.category),
         acquiredOn: dto.acquiredOn ? new Date(dto.acquiredOn) : undefined,
         cost: dto.cost,
         depreciationRate: dto.depreciationRate,
         location: dto.location,
-        condition: dto.condition,
-        status: dto.status,
+        condition: AssetConditionWire.toPrismaOptional(dto.condition),
+        status: AssetStatusWire.toPrismaOptional(dto.status),
         fundId: dto.fundId,
         notes: dto.notes,
       },
@@ -160,7 +163,7 @@ export class AssetsService {
       ),
     });
 
-    return this.toRecord(asset);
+    return this.findOneOrFail(id);
   }
 
   /**
@@ -226,13 +229,13 @@ export class AssetsService {
       tag: asset.tag,
       name: asset.nameEn ?? asset.nameTa,
       nameTa: asset.nameTa,
-      category: asset.category,
+      category: AssetCategoryWire.toWire(asset.category),
       acquiredOn: asset.acquiredOn.toISOString().slice(0, 10),
       cost,
       depreciationRate: rate,
       location: asset.location,
-      condition: asset.condition,
-      status: asset.status,
+      condition: AssetConditionWire.toWire(asset.condition),
+      status: AssetStatusWire.toWire(asset.status),
       fundId: asset.fundId,
       fundName: asset.fund.nameEn ?? asset.fund.nameTa,
       disposedOn: asset.disposedOn?.toISOString().slice(0, 10) ?? null,
