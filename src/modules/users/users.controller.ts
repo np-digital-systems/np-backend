@@ -107,6 +107,15 @@ export class UsersController {
     return this.users.setSubscription(id, dto, context);
   }
 
+  @Post(':id/sign-out')
+  @ApiOperation({ summary: 'Revoke every session this user holds, without disabling the account' })
+  signOut(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Actor() context: ActorContext,
+  ): Promise<{ revoked: number }> {
+    return this.users.signOutEverywhere(id, context);
+  }
+
   @Post(':id/activate')
   @ApiOperation({ summary: 'Reactivate a deactivated account' })
   activate(
