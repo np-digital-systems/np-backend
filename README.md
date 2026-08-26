@@ -37,10 +37,12 @@ src/
   app.module.ts        composition root; global guards, filter and interceptor
   config/              environment schema and validation (zod, fails fast at boot)
   common/              cross-cutting: decorators, DTOs, filters, guards, interceptors
-  infrastructure/      technical adapters: prisma, health
+  infrastructure/      technical adapters: prisma, audit, health
   modules/             one folder per bounded context
-    auth/              login, refresh rotation, sessions, RBAC
-    users/             users and the sanththa register
+    auth/              login, refresh rotation, sessions, passwords, RBAC
+    users/             users, staff accounts and the sanththa register
+    roles/             the role matrix and the permission catalogue
+    sponsors/          standing sponsorship of event-type instances
   generated/prisma/    Prisma client output; generated, not committed
 test/                  end-to-end specs
 ```
@@ -51,14 +53,16 @@ callers of `PrismaService`. Anything shared by two modules moves to `common/`;
 anything that talks to a system outside the process lives in `infrastructure/`.
 
 Adding a context — vouchers, ledger, events, assets, deposits, notifications,
-audit, settings — means adding a folder under `modules/` in that shape and
-importing it in `app.module.ts`.
+settings — means adding a folder under `modules/` in that shape and importing it
+in `app.module.ts`.
 
 ## Authentication and authorisation
 
 Login returns a short-lived JWT access token and an opaque refresh token. Refresh
 tokens are stored only as a SHA-256 hash in `user_sessions`, and rotate on every
-use: presenting an already-used token fails. Passwords are hashed with Argon2id.
+use: presenting an already-used token fails. Passwords are hashed with Argon2id,
+and a failed login still pays the hashing cost so a missing account and a wrong
+password take the same time.
 
 `JwtAuthGuard` and `PermissionsGuard` are registered globally, so every route is
 authenticated unless marked `@Public()`. Authorisation is by permission, not role:
@@ -68,15 +72,40 @@ authenticated unless marked `@Public()`. Authorisation is by permission, not rol
 approve(@Param('id') id: string) { ... }
 ```
 
-The role-to-permission mapping is cached in process for five minutes, so a normal
-request costs one JWT verification and no database round trip. Call
-`PermissionsService.invalidate(role)` after changing a role's permissions — note
-that this clears the cache on one instance only, so with several instances a
-change takes up to five minutes to apply everywhere.
+The permission catalogue is the one the frontend gates its UI on
+(`src/features/auth/types/permission.ts`) — 42 permissions across five groups, with
+the same role matrix. `prisma/seed.ts` is authoritative: it upserts the catalogue
+and removes any permission no longer in it.
 
-Because the access token carries the role, deactivating a user takes effect on
-their next token refresh rather than immediately; `POST /auth/logout-all` and
-`DELETE /users/:id` both revoke sessions to close that window.
+The role-to-permission mapping is cached in process for five minutes, so a normal
+request costs one JWT verification and no database round trip.
+`PUT /roles/:code/permissions` invalidates that role immediately — note it clears
+one instance only, so with several instances a change takes up to five minutes to
+apply everywhere.
+
+Because the access token carries the role, a role change or deactivation would
+otherwise take effect only at the next refresh. Both revoke the user's sessions so
+the change lands at once. Two guards protect the portal from being locked out: you
+cannot change your own role or deactivate yourself, and the last active
+administrator cannot be demoted, deactivated, or stripped of `user:manage`.
+
+### Withheld rather than hidden
+
+Roles without `event-sponsor:manage` never receive a sponsor's phone or email —
+`SponsorsService` nulls them before the response is built, matching the rule the
+frontend states in `lib/event-privacy.ts`. Omitting a field from the markup while
+still sending it in the payload would not be access control.
+
+## Audit trail
+
+Every mutation in these modules writes to `audit_log` through `AuditService`:
+sign-in and sign-out, user creation and updates, role and permission changes,
+password resets, and sponsor assignments. Entries carry the actor, their role at
+the time, the source IP, and a field-level diff where one applies.
+
+The table is append-only at the database level, so an audit row cannot be edited
+or deleted by the application — including by this service. An audit write that
+fails is logged and swallowed rather than failing the request it describes.
 
 ## Latency
 
@@ -97,6 +126,29 @@ There is no Redis. Two things depend on that, and both matter only once more tha
 one instance is running: rate limiting is per-instance, so N instances allow N
 times `THROTTLE_LIMIT`; and the permission cache is per-instance, as noted above.
 Introduce a shared store before scaling out horizontally.
+
+## API surface
+
+| Area | Routes |
+| --- | --- |
+| Auth | `POST /auth/login` `POST /auth/refresh` `POST /auth/logout` `POST /auth/logout-all` `GET /auth/me` `GET /auth/sessions` `DELETE /auth/sessions/:id` `POST /auth/change-password` |
+| Users | `GET /users` `GET /users/:id` `POST /users` `PATCH /users/:id` `PATCH /users/:id/role` `POST /users/:id/reset-password` `POST /users/:id/activate` `DELETE /users/:id` |
+| Register | `POST /users/:id/enrol` `PATCH /users/:id/subscription`, plus `?membersOnly` and `?subscribes` on `GET /users` |
+| Roles | `GET /roles` `GET /roles/permissions` `GET /roles/:code` `PUT /roles/:code/permissions` |
+| Sponsors | `GET /sponsors` `GET /sponsors/directory` `GET /sponsors/:id` `POST /sponsors` `PATCH /sponsors/:id` `DELETE /sponsors/:id` |
+
+Users and roles require `user:manage`. Sponsors require `event-sponsor:view` to
+read and `event-sponsor:manage` to write or to see contact details.
+
+Member numbers are never supplied by a caller: setting `joinedOn` — through
+`POST /users`, `PATCH /users/:id` or `POST /users/:id/enrol` — makes the database
+allocate the next `S-00n`, and it can never be changed afterwards.
+
+Event types themselves are read-only here; their CRUD belongs to the events module,
+which is not built yet. `GET /sponsors` composes each assignment with its event
+type, its sponsor, an `instanceLabel` ("Week 24", "Valarpirai", or the temple's own
+name for the day) and the count of dated occurrences it covers this year, matching
+the frontend's `SponsorAssignment` type.
 
 ## Scripts
 
