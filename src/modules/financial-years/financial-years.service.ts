@@ -1,13 +1,14 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 
 import { toRupees, toRupeesOrNull } from '../../common/money/money';
 import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
-import {
-  AccountType,
-  FinancialYearStatus,
-  VoucherStatus,
-} from '../../generated/prisma/enums';
+import { AccountType, FinancialYearStatus, VoucherStatus } from '../../generated/prisma/enums';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import {
@@ -144,7 +145,9 @@ export class FinancialYearsService {
     const unfinished = await this.prisma.voucher.count({
       where: {
         financialYearId: id,
-        status: { in: [VoucherStatus.Draft, VoucherStatus.PendingApproval, VoucherStatus.Approved] },
+        status: {
+          in: [VoucherStatus.Draft, VoucherStatus.PendingApproval, VoucherStatus.Approved],
+        },
       },
     });
 
