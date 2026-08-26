@@ -1,4 +1,9 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 
 import { toRupees } from '../../common/money/money';
 import { ActorContext } from '../../common/types/authenticated-user';
@@ -154,7 +159,9 @@ export class FixedDepositsService {
 
     if (!previous) throw new NotFoundException(`Fixed deposit ${id} was not found`);
     if (previous.status === DepositStatus.renewed || previous.status === DepositStatus.closed) {
-      throw new ConflictException(`Deposit ${previous.certificateNo} has already been ${previous.status}`);
+      throw new ConflictException(
+        `Deposit ${previous.certificateNo} has already been ${previous.status}`,
+      );
     }
 
     this.assertDates(dto.placedOn, dto.maturesOn);
