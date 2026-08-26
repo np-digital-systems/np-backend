@@ -16,15 +16,21 @@ import { AuditModule } from './infrastructure/audit/audit.module';
 import { PrismaModule } from './infrastructure/prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AccountsModule } from './modules/accounts/accounts.module';
+import { AuditReaderModule } from './modules/audit/audit-reader.module';
 import { AssetsModule } from './modules/assets/assets.module';
 import { BankAccountsModule } from './modules/bank-accounts/bank-accounts.module';
 import { FinancialYearsModule } from './modules/financial-years/financial-years.module';
 import { FixedDepositsModule } from './modules/fixed-deposits/fixed-deposits.module';
+import { EventTypesModule } from './modules/event-types/event-types.module';
+import { EventsModule } from './modules/events/events.module';
 import { FundsModule } from './modules/funds/funds.module';
 import { LedgerModule } from './modules/ledger/ledger.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 import { ProjectsModule } from './modules/projects/projects.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { RolesModule } from './modules/roles/roles.module';
+import { SanththaModule } from './modules/sanththa/sanththa.module';
+import { SearchModule } from './modules/search/search.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { VouchersModule } from './modules/vouchers/vouchers.module';
 import { SponsorsModule } from './modules/sponsors/sponsors.module';
@@ -92,6 +98,12 @@ import { UsersModule } from './modules/users/users.module';
     FixedDepositsModule,
     AssetsModule,
     ReportsModule,
+    EventTypesModule,
+    EventsModule,
+    SanththaModule,
+    NotificationsModule,
+    AuditReaderModule,
+    SearchModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
