@@ -83,10 +83,16 @@ export class RolesService {
       throw new BadRequestException(`Unknown permission(s): ${unknown.join(', ')}`);
     }
 
-    if (code === UserRole.admin && !dto.permissions.includes('user:manage')) {
-      throw new BadRequestException(
-        'The administrator role must keep user:manage, or nobody can administer the portal',
-      );
+    const KEYS_TO_THE_BUILDING = ['role:manage', 'user:manage'];
+
+    if (code === UserRole.admin) {
+      const dropped = KEYS_TO_THE_BUILDING.filter((key) => !dto.permissions.includes(key));
+
+      if (dropped.length > 0) {
+        throw new BadRequestException(
+          `The administrator role must keep ${dropped.join(' and ')}, or nobody can administer the portal`,
+        );
+      }
     }
 
     await this.prisma.$transaction([
