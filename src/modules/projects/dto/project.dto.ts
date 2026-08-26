@@ -3,7 +3,7 @@ import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
   IsDateString,
-  IsEnum,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -13,7 +13,8 @@ import {
   Min,
 } from 'class-validator';
 
-import { ProjectStatus } from '../../../generated/prisma/enums';
+import { ProjectStatusWire } from '../../../common/enums/wire';
+import type { WireProjectStatus } from '../../../common/enums/wire';
 
 export class ProjectRefDto {
   @ApiProperty() id!: number;
@@ -27,7 +28,7 @@ export class ProjectDto extends ProjectRefDto {
   @ApiProperty({ nullable: true }) budget!: number | null;
   @ApiProperty() startDate!: string;
   @ApiProperty({ nullable: true }) targetDate!: string | null;
-  @ApiProperty({ enum: ProjectStatus }) status!: ProjectStatus;
+  @ApiProperty({ enum: ProjectStatusWire.values }) status!: WireProjectStatus;
   @ApiProperty() description!: string;
 }
 
@@ -75,10 +76,10 @@ export class CreateProjectDto {
   @IsDateString()
   targetDate?: string;
 
-  @ApiPropertyOptional({ enum: ProjectStatus })
+  @ApiPropertyOptional({ enum: ProjectStatusWire.values })
   @IsOptional()
-  @IsEnum(ProjectStatus)
-  status?: ProjectStatus;
+  @IsIn(ProjectStatusWire.values)
+  status?: WireProjectStatus;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -101,10 +102,10 @@ export class QueryProjectsDto {
   @IsInt()
   fundId?: number;
 
-  @ApiPropertyOptional({ enum: ProjectStatus })
+  @ApiPropertyOptional({ enum: ProjectStatusWire.values })
   @IsOptional()
-  @IsEnum(ProjectStatus)
-  status?: ProjectStatus;
+  @IsIn(ProjectStatusWire.values)
+  status?: WireProjectStatus;
 
   @ApiPropertyOptional()
   @IsOptional()

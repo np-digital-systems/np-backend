@@ -8,6 +8,7 @@ import {
 import { share, toRupees, toRupeesOrNull } from '../../common/money/money';
 import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
+import { ProjectStatusWire } from '../../common/enums/wire';
 import { AccountType, ProjectStatus } from '../../generated/prisma/enums';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
@@ -53,7 +54,11 @@ export class ProjectsService {
 
   async findMany(query: QueryProjectsDto): Promise<ProjectRecordDto[]> {
     const projects = await this.prisma.project.findMany({
-      where: { fundId: query.fundId, status: query.status, isActive: query.isActive },
+      where: {
+        fundId: query.fundId,
+        status: ProjectStatusWire.toPrismaOptional(query.status),
+        isActive: query.isActive,
+      },
       include: { fund: true },
       orderBy: { startDate: 'desc' },
     });
@@ -100,7 +105,7 @@ export class ProjectsService {
         budget: dto.budget,
         startDate: new Date(dto.startDate),
         targetDate: dto.targetDate ? new Date(dto.targetDate) : undefined,
-        status: dto.status ?? ProjectStatus.planning,
+        status: ProjectStatusWire.toPrismaOptional(dto.status) ?? ProjectStatus.planning,
         description: dto.description ?? '',
       },
       include: { fund: true },
@@ -146,9 +151,9 @@ export class ProjectsService {
         budget: dto.budget,
         startDate: dto.startDate ? new Date(dto.startDate) : undefined,
         targetDate: dto.targetDate ? new Date(dto.targetDate) : undefined,
-        status: dto.status,
+        status: ProjectStatusWire.toPrismaOptional(dto.status),
         description: dto.description,
-        isActive: dto.isActive ?? this.activityFor(dto.status),
+        isActive: dto.isActive ?? this.activityFor(ProjectStatusWire.toPrismaOptional(dto.status)),
       },
       include: { fund: true },
     });
@@ -168,7 +173,7 @@ export class ProjectsService {
   }
 
   async close(id: number, context: ActorContext): Promise<ProjectRecordDto> {
-    return this.update(id, { status: ProjectStatus.completed, isActive: false }, context);
+    return this.update(id, { status: 'completed', isActive: false }, context);
   }
 
   /**
@@ -235,7 +240,7 @@ export class ProjectsService {
       budget,
       startDate: project.startDate.toISOString().slice(0, 10),
       targetDate: project.targetDate?.toISOString().slice(0, 10) ?? null,
-      status: project.status,
+      status: ProjectStatusWire.toWire(project.status),
       description: project.description,
       fundName: project.fund.nameEn ?? project.fund.nameTa,
       spent: round(spent),
