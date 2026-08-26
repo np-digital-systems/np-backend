@@ -57,7 +57,9 @@ export class AssetsController {
 
   @Post(':id/dispose')
   @RequirePermissions('asset:dispose')
-  @ApiOperation({ summary: 'Write the asset off or sell it; dating the disposal stops depreciation' })
+  @ApiOperation({
+    summary: 'Write the asset off or sell it; dating the disposal stops depreciation',
+  })
   dispose(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: DisposeAssetDto,
