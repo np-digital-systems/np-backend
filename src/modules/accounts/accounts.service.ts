@@ -1,4 +1,9 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 
 import { naturalBalance } from '../../common/money/account-direction';
 import { toRupees } from '../../common/money/money';
@@ -19,7 +24,11 @@ import {
 
 type AccountRow = Prisma.AccountGetPayload<Record<string, never>>;
 
-export function toAccountRef(account: Pick<AccountRow, 'id' | 'code' | 'nameTa' | 'nameEn' | 'type'>): AccountRefDto {
+const article = (type: AccountType) => (/^[aeiou]/.test(type) ? `An ${type}` : `A ${type}`);
+
+export function toAccountRef(
+  account: Pick<AccountRow, 'id' | 'code' | 'nameTa' | 'nameEn' | 'type'>,
+): AccountRefDto {
   return {
     id: account.id,
     code: account.code,
@@ -61,7 +70,10 @@ export class AccountsService {
   }
 
   async findOneOrFail(id: number, financialYearId?: number): Promise<AccountRecordDto> {
-    const account = await this.prisma.account.findUnique({ where: { id }, include: { parent: true } });
+    const account = await this.prisma.account.findUnique({
+      where: { id },
+      include: { parent: true },
+    });
 
     if (!account) throw new NotFoundException(`Account ${id} was not found`);
 
@@ -77,7 +89,9 @@ export class AccountsService {
     if (!account) throw new NotFoundException(`Account ${id} was not found`);
     if (!account.isActive) throw new BadRequestException(`Account ${account.code} is inactive`);
     if (!account.isPostable) {
-      throw new BadRequestException(`Account ${account.code} is a grouping head and takes no entries`);
+      throw new BadRequestException(
+        `Account ${account.code} is a grouping head and takes no entries`,
+      );
     }
 
     return account;
@@ -85,6 +99,12 @@ export class AccountsService {
 
   async create(dto: CreateAccountDto, context: ActorContext): Promise<AccountRecordDto> {
     if (dto.parentId) await this.assertParentIsCompatible(dto.parentId, dto.type);
+
+    if (dto.openingBalance && this.isNominal(dto.type)) {
+      throw new BadRequestException(
+        'Income and expense heads always open at zero; they measure a year, not a position',
+      );
+    }
 
     const account = await this.prisma.account.create({
       data: {
@@ -109,7 +129,11 @@ export class AccountsService {
     return this.toRecord(account, account.parent, undefined);
   }
 
-  async update(id: number, dto: UpdateAccountDto, context: ActorContext): Promise<AccountRecordDto> {
+  async update(
+    id: number,
+    dto: UpdateAccountDto,
+    context: ActorContext,
+  ): Promise<AccountRecordDto> {
     const before = await this.prisma.account.findUnique({ where: { id } });
 
     if (!before) throw new NotFoundException(`Account ${id} was not found`);
@@ -162,7 +186,7 @@ export class AccountsService {
 
     if (parent.type !== type) {
       throw new BadRequestException(
-        `A ${type} account cannot sit under the ${parent.type} head ${parent.code}`,
+        `${article(type)} account cannot sit under the ${parent.type} head ${parent.code}`,
       );
     }
   }
@@ -171,7 +195,8 @@ export class AccountsService {
     let cursor: number | null = candidateParentId;
 
     for (let depth = 0; cursor !== null && depth < 32; depth += 1) {
-      if (cursor === id) throw new BadRequestException('That would make the chart of accounts a loop');
+      if (cursor === id)
+        throw new BadRequestException('That would make the chart of accounts a loop');
 
       const parent: { parentId: number | null } | null = await this.prisma.account.findUnique({
         where: { id: cursor },
@@ -182,8 +207,12 @@ export class AccountsService {
     }
   }
 
+  private isNominal(type: AccountType): boolean {
+    return type === AccountType.income || type === AccountType.expense;
+  }
+
   private async assertOpeningIsEditable(id: number, type: AccountType): Promise<void> {
-    if (type === AccountType.income || type === AccountType.expense) {
+    if (this.isNominal(type)) {
       throw new BadRequestException('Income and expense heads always open at zero');
     }
 
@@ -204,7 +233,9 @@ export class AccountsService {
     const children = await this.prisma.account.count({ where: { parentId: id, isActive: true } });
 
     if (children > 0) {
-      throw new ConflictException(`Deactivate this head’s ${children} active child account(s) first`);
+      throw new ConflictException(
+        `Deactivate this head’s ${children} active child account(s) first`,
+      );
     }
   }
 

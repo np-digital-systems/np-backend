@@ -110,7 +110,9 @@ export class QueryAccountsDto {
   @MaxLength(120)
   search?: string;
 
-  @ApiPropertyOptional({ description: 'Year the balance is measured over; defaults to the current year' })
+  @ApiPropertyOptional({
+    description: 'Year the balance is measured over; defaults to the current year',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
