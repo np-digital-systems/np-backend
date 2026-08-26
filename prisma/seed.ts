@@ -11,59 +11,97 @@ const prisma = new PrismaClient({
 });
 
 const PERMISSION_GROUPS = [
-  { code: 'accounting', label: 'Accounting', description: 'Vouchers, ledger and the chart of accounts', sortOrder: 1 },
-  { code: 'register', label: 'Sanththa register', description: 'Members and their subscriptions', sortOrder: 2 },
-  { code: 'events', label: 'Events', description: 'Event types, the calendar and sponsorship', sortOrder: 3 },
-  { code: 'assets', label: 'Assets and deposits', description: 'Fixed assets and fixed deposits', sortOrder: 4 },
-  { code: 'administration', label: 'Administration', description: 'Users, roles and settings', sortOrder: 5 },
+  { code: 'dashboard', label: 'Dashboard', description: 'The portal landing view', sortOrder: 1 },
+  { code: 'accounting', label: 'Accounting', description: 'Vouchers, the ledger, books and bank accounts', sortOrder: 2 },
+  { code: 'finance', label: 'Funds and property', description: 'Funds, projects, deposits, assets and reports', sortOrder: 3 },
+  { code: 'events', label: 'Events', description: 'The calendar, event types and sponsorship', sortOrder: 4 },
+  { code: 'administration', label: 'Administration', description: 'Users, the audit trail and settings', sortOrder: 5 },
 ];
 
 const PERMISSIONS = [
-  ['voucher:read', 'accounting', 'View vouchers'],
-  ['voucher:create', 'accounting', 'Raise vouchers'],
+  ['dashboard:view', 'dashboard', 'View the dashboard'],
+
+  ['account:view', 'accounting', 'View the chart of accounts'],
+  ['account:manage', 'accounting', 'Maintain the chart of accounts'],
+  ['transaction:view', 'accounting', 'View posted transactions'],
+  ['transaction:create', 'accounting', 'Record transactions'],
+  ['transaction:export', 'accounting', 'Export transactions'],
+  ['receipt-voucher:view', 'accounting', 'View receipt vouchers'],
+  ['receipt-voucher:create', 'accounting', 'Raise receipt vouchers'],
+  ['payment-voucher:view', 'accounting', 'View payment vouchers'],
+  ['payment-voucher:create', 'accounting', 'Raise payment vouchers'],
+  ['voucher:create', 'accounting', 'Create vouchers'],
   ['voucher:submit', 'accounting', 'Submit vouchers for approval'],
   ['voucher:approve', 'accounting', 'Approve or reject vouchers'],
   ['voucher:post', 'accounting', 'Post vouchers to the ledger'],
-  ['ledger:read', 'accounting', 'View the ledger and reports'],
-  ['account:read', 'accounting', 'View the chart of accounts'],
-  ['account:manage', 'accounting', 'Maintain the chart of accounts'],
-  ['financial-year:manage', 'accounting', 'Open and close financial years'],
-  ['member:read', 'register', 'View the sanththa register'],
-  ['member:manage', 'register', 'Enrol and update members'],
-  ['subscription:record', 'register', 'Record subscription payments'],
-  ['event:read', 'events', 'View the event calendar'],
-  ['event:manage', 'events', 'Maintain events and event types'],
-  ['sponsor:manage', 'events', 'Assign event sponsors'],
-  ['asset:read', 'assets', 'View assets and deposits'],
-  ['asset:manage', 'assets', 'Maintain assets and deposits'],
-  ['users:read', 'administration', 'View users'],
-  ['users:create', 'administration', 'Create users'],
-  ['users:update', 'administration', 'Update users'],
-  ['users:delete', 'administration', 'Deactivate users'],
-  ['audit:read', 'administration', 'Read the audit log'],
+  ['voucher:manage-all', 'accounting', "Act on other people's vouchers"],
+  ['cash-book:view', 'accounting', 'View the cash book'],
+  ['bank-book:view', 'accounting', 'View the bank book'],
+  ['bank-account:view', 'accounting', 'View bank accounts'],
+  ['bank-account:manage', 'accounting', 'Open and maintain bank accounts'],
+
+  ['fund:view', 'finance', 'View funds'],
+  ['fund:manage', 'finance', 'Maintain funds'],
+  ['project:view', 'finance', 'View projects'],
+  ['project:manage', 'finance', 'Maintain projects'],
+  ['fixed-deposit:view', 'finance', 'View fixed deposits'],
+  ['fixed-deposit:manage', 'finance', 'Place and renew fixed deposits'],
+  ['asset:view', 'finance', 'View assets'],
+  ['asset:manage', 'finance', 'Maintain the asset register'],
+  ['asset:dispose', 'finance', 'Dispose of or write off an asset'],
+  ['report:generate', 'finance', 'Generate reports'],
+
+  ['event:view', 'events', 'View the event calendar'],
+  ['event:create', 'events', 'Add events to the calendar'],
+  ['event:update', 'events', 'Change calendared events'],
+  ['event:delete', 'events', 'Remove events from the calendar'],
+  ['event:complete', 'events', 'Mark events complete'],
+  ['event:export', 'events', 'Export the calendar'],
+  ['event-type:manage', 'events', 'Maintain event types'],
+  ['event-schedule:view', 'events', 'View the yearly schedule'],
+  ['event-sponsor:view', 'events', 'View sponsorship assignments'],
+  ['event-sponsor:manage', 'events', 'Assign sponsors and see their contact details'],
+
+  ['user:manage', 'administration', 'Manage users, members and roles'],
+  ['audit:view', 'administration', 'Read the audit trail'],
   ['settings:manage', 'administration', 'Change portal settings'],
 ] as const;
 
 const ROLES = [
   { code: UserRole.admin, label: 'Administrator', description: 'Full access to the portal', isSystem: true, sortOrder: 1 },
   { code: UserRole.accountant, label: 'Accountant', description: 'Keeps the books and approves vouchers', isSystem: true, sortOrder: 2 },
-  { code: UserRole.cashier, label: 'Cashier', description: 'Raises vouchers and collects subscriptions', isSystem: true, sortOrder: 3 },
-  { code: UserRole.user, label: 'Devotee', description: 'A member or sponsor with no portal access', isSystem: true, sortOrder: 4 },
+  { code: UserRole.cashier, label: 'Cashier', description: 'Collects at the hundial and raises vouchers', isSystem: true, sortOrder: 3 },
+  { code: UserRole.user, label: 'Devotee', description: 'A member or sponsor with no operational access', isSystem: true, sortOrder: 4 },
+];
+
+const ACCOUNTANT = [
+  'dashboard:view',
+  'account:view', 'account:manage',
+  'transaction:view', 'transaction:create', 'transaction:export',
+  'receipt-voucher:view', 'receipt-voucher:create',
+  'payment-voucher:view', 'payment-voucher:create',
+  'voucher:create', 'voucher:submit', 'voucher:approve', 'voucher:post', 'voucher:manage-all',
+  'cash-book:view', 'bank-book:view', 'bank-account:view',
+  'fund:view', 'fund:manage', 'project:view', 'project:manage',
+  'fixed-deposit:view', 'asset:view', 'asset:manage', 'report:generate',
+  'event:view', 'event:export', 'event-schedule:view', 'event-sponsor:view',
+];
+
+const CASHIER = [
+  'dashboard:view',
+  'transaction:view', 'transaction:create',
+  'receipt-voucher:view', 'receipt-voucher:create',
+  'payment-voucher:view', 'payment-voucher:create',
+  'voucher:create', 'voucher:submit',
+  'cash-book:view',
+  'event:view', 'event-schedule:view', 'event-sponsor:view',
 ];
 
 const ROLE_PERMISSIONS: Record<string, string[]> = {
   [UserRole.admin]: PERMISSIONS.map(([code]) => code),
-  [UserRole.accountant]: [
-    'voucher:read', 'voucher:create', 'voucher:submit', 'voucher:approve', 'voucher:post',
-    'ledger:read', 'account:read', 'account:manage', 'financial-year:manage',
-    'member:read', 'subscription:record', 'event:read', 'asset:read', 'asset:manage',
-    'users:read', 'audit:read',
-  ],
-  [UserRole.cashier]: [
-    'voucher:read', 'voucher:create', 'voucher:submit', 'ledger:read', 'account:read',
-    'member:read', 'member:manage', 'subscription:record', 'event:read', 'asset:read',
-  ],
-  [UserRole.user]: [],
+  [UserRole.accountant]: ACCOUNTANT,
+  [UserRole.cashier]: CASHIER,
+  [UserRole.user]: ['dashboard:view', 'event:view'],
 };
 
 async function main(): Promise<void> {
@@ -83,14 +121,23 @@ async function main(): Promise<void> {
     ),
   ]);
 
-  for (const [roleCode, permissions] of Object.entries(ROLE_PERMISSIONS)) {
-    await prisma.rolePermission.deleteMany({ where: { roleCode: roleCode as UserRole } });
+  const codes = PERMISSIONS.map(([code]) => code);
 
-    if (permissions.length > 0) {
-      await prisma.rolePermission.createMany({
-        data: permissions.map((permissionCode) => ({ roleCode: roleCode as UserRole, permissionCode })),
-      });
-    }
+  await prisma.permission.deleteMany({ where: { code: { notIn: codes } } });
+  await prisma.permissionGroup.deleteMany({
+    where: { code: { notIn: PERMISSION_GROUPS.map((group) => group.code) } },
+  });
+
+  for (const [roleCode, permissions] of Object.entries(ROLE_PERMISSIONS)) {
+    await prisma.$transaction([
+      prisma.rolePermission.deleteMany({ where: { roleCode: roleCode as UserRole } }),
+      prisma.rolePermission.createMany({
+        data: permissions.map((permissionCode) => ({
+          roleCode: roleCode as UserRole,
+          permissionCode,
+        })),
+      }),
+    ]);
   }
 
   await prisma.setting.upsert({
@@ -129,7 +176,10 @@ async function main(): Promise<void> {
     update: {},
   });
 
-  console.log(`Seeded ${PERMISSIONS.length} permissions, ${ROLES.length} roles and the admin account (${email}).`);
+  console.log(
+    `Seeded ${PERMISSIONS.length} permissions across ${PERMISSION_GROUPS.length} groups, ` +
+      `${ROLES.length} roles and the admin account (${email}).`,
+  );
 }
 
 main()
