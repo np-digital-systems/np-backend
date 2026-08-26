@@ -18,26 +18,26 @@ export class FinancialYearsController {
   constructor(private readonly years: FinancialYearsService) {}
 
   @Get()
-  @RequirePermissions('transaction:view')
+  @RequirePermissions('financial-year:view')
   @ApiOperation({ summary: 'List financial years; totals are live until the year is closed' })
   findMany(@Query() query: QueryFinancialYearsDto): Promise<FinancialYearDto[]> {
     return this.years.findMany(query);
   }
 
   @Get('current')
-  @RequirePermissions('transaction:view')
+  @RequirePermissions('financial-year:view')
   current(): Promise<FinancialYearDto> {
     return this.years.current();
   }
 
   @Get(':id')
-  @RequirePermissions('transaction:view')
+  @RequirePermissions('financial-year:view')
   findOne(@Param('id', ParseIntPipe) id: number): Promise<FinancialYearDto> {
     return this.years.findOneOrFail(id);
   }
 
   @Post()
-  @RequirePermissions('settings:manage')
+  @RequirePermissions('financial-year:manage')
   create(
     @Body() dto: CreateFinancialYearDto,
     @Actor() context: ActorContext,
@@ -46,7 +46,7 @@ export class FinancialYearsController {
   }
 
   @Post(':id/open')
-  @RequirePermissions('settings:manage')
+  @RequirePermissions('financial-year:manage')
   @ApiOperation({ summary: 'Open a year and make it the current one' })
   open(
     @Param('id', ParseIntPipe) id: number,
@@ -56,7 +56,7 @@ export class FinancialYearsController {
   }
 
   @Post(':id/close')
-  @RequirePermissions('settings:manage')
+  @RequirePermissions('financial-year:manage')
   @ApiOperation({ summary: 'Freeze the year’s totals into the row and refuse further postings' })
   close(
     @Param('id', ParseIntPipe) id: number,
