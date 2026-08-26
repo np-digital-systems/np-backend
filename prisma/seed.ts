@@ -116,6 +116,16 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
   [UserRole.user]: ['dashboard:view', 'event:view'],
 };
 
+/*
+ * Prisma gives a batch transaction five seconds by default, which is generous
+ * against a database on the same machine and not nearly enough against a
+ * managed one in another region: every statement in the batch is its own round
+ * trip, and sixty of them to Singapore outlast the default before any of them
+ * is slow. The work here is small and runs once, so the limit is raised to
+ * something a distant database can meet.
+ */
+const TRANSACTION_OPTIONS = { maxWait: 15_000, timeout: 120_000 };
+
 async function main(): Promise<void> {
   await prisma.$transaction([
     ...PERMISSION_GROUPS.map((group) =>
@@ -131,7 +141,7 @@ async function main(): Promise<void> {
     ...ROLES.map((role) =>
       prisma.role.upsert({ where: { code: role.code }, create: role, update: role }),
     ),
-  ]);
+  ], TRANSACTION_OPTIONS);
 
   const codes = PERMISSIONS.map(([code]) => code);
 
@@ -149,7 +159,7 @@ async function main(): Promise<void> {
           permissionCode,
         })),
       }),
-    ]);
+    ], TRANSACTION_OPTIONS);
   }
 
   await prisma.setting.upsert({
