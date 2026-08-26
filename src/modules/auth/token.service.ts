@@ -9,6 +9,7 @@ import { ACCESS_TOKEN_AUDIENCE, ACCESS_TOKEN_ISSUER } from './auth.constants';
 
 export interface AccessTokenPayload {
   sub: string;
+  name: string;
   role: UserRole;
   sid: string;
 }
