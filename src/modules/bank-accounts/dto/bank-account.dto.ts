@@ -25,7 +25,9 @@ export class BankAccountRefDto {
 export class BankAccountDto extends BankAccountRefDto {
   @ApiProperty() bankName!: string;
   @ApiProperty() branch!: string;
-  @ApiProperty({ description: 'Masked to the last four digits; the full number never leaves the server' })
+  @ApiProperty({
+    description: 'Masked to the last four digits; the full number never leaves the server',
+  })
   accountNumber!: string;
   @ApiProperty() openingBalance!: number;
   @ApiProperty() openedOn!: string;
