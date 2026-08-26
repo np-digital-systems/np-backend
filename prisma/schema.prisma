@@ -122,10 +122,10 @@ enum AssetStatus {
 
 enum FrequencyType {
   weekly
-  monthlyTwice @map("monthly_twice")
-  monthlyOnce  @map("monthly_once")
+  monthly_twice
+  monthly_once
   annual
-  multiDay     @map("multi_day")
+  multi_day
 
   @@map("frequency_type")
 }

@@ -15,7 +15,18 @@ import { HealthModule } from './infrastructure/health/health.module';
 import { AuditModule } from './infrastructure/audit/audit.module';
 import { PrismaModule } from './infrastructure/prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
+import { AccountsModule } from './modules/accounts/accounts.module';
+import { AssetsModule } from './modules/assets/assets.module';
+import { BankAccountsModule } from './modules/bank-accounts/bank-accounts.module';
+import { FinancialYearsModule } from './modules/financial-years/financial-years.module';
+import { FixedDepositsModule } from './modules/fixed-deposits/fixed-deposits.module';
+import { FundsModule } from './modules/funds/funds.module';
+import { LedgerModule } from './modules/ledger/ledger.module';
+import { ProjectsModule } from './modules/projects/projects.module';
+import { ReportsModule } from './modules/reports/reports.module';
 import { RolesModule } from './modules/roles/roles.module';
+import { SettingsModule } from './modules/settings/settings.module';
+import { VouchersModule } from './modules/vouchers/vouchers.module';
 import { SponsorsModule } from './modules/sponsors/sponsors.module';
 import { UsersModule } from './modules/users/users.module';
 
@@ -70,6 +81,17 @@ import { UsersModule } from './modules/users/users.module';
     UsersModule,
     RolesModule,
     SponsorsModule,
+    SettingsModule,
+    FinancialYearsModule,
+    AccountsModule,
+    FundsModule,
+    ProjectsModule,
+    BankAccountsModule,
+    VouchersModule,
+    LedgerModule,
+    FixedDepositsModule,
+    AssetsModule,
+    ReportsModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: AllExceptionsFilter },
