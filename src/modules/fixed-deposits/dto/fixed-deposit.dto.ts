@@ -3,6 +3,7 @@ import { Transform, Type } from 'class-transformer';
 import {
   IsDateString,
   IsEnum,
+  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
@@ -13,7 +14,9 @@ import {
   Min,
 } from 'class-validator';
 
-import { DepositStatus, InterestPayout } from '../../../generated/prisma/enums';
+import { InterestPayoutWire } from '../../../common/enums/wire';
+import type { WireInterestPayout } from '../../../common/enums/wire';
+import { DepositStatus } from '../../../generated/prisma/enums';
 
 export class DepositRecordDto {
   @ApiProperty() id!: number;
@@ -25,7 +28,7 @@ export class DepositRecordDto {
   @ApiProperty() placedOn!: string;
   @ApiProperty() maturesOn!: string;
   @ApiProperty() tenureMonths!: number;
-  @ApiProperty({ enum: InterestPayout }) interestPayout!: InterestPayout;
+  @ApiProperty({ enum: InterestPayoutWire.values }) interestPayout!: WireInterestPayout;
   @ApiProperty() fundId!: number;
   @ApiProperty() fundName!: string;
   @ApiProperty({ enum: DepositStatus }) status!: DepositStatus;
@@ -83,9 +86,9 @@ export class CreateFixedDepositDto {
   @Max(600)
   tenureMonths!: number;
 
-  @ApiProperty({ enum: InterestPayout })
-  @IsEnum(InterestPayout)
-  interestPayout!: InterestPayout;
+  @ApiProperty({ enum: InterestPayoutWire.values })
+  @IsIn(InterestPayoutWire.values)
+  interestPayout!: WireInterestPayout;
 
   @ApiProperty()
   @Type(() => Number)

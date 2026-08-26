@@ -8,6 +8,7 @@ import {
 import { toRupees } from '../../common/money/money';
 import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
+import { InterestPayoutWire } from '../../common/enums/wire';
 import { DepositStatus } from '../../generated/prisma/enums';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
@@ -102,7 +103,7 @@ export class FixedDepositsService {
         placedOn: dto.placedOn ? new Date(dto.placedOn) : undefined,
         maturesOn: dto.maturesOn ? new Date(dto.maturesOn) : undefined,
         tenureMonths: dto.tenureMonths,
-        interestPayout: dto.interestPayout,
+        interestPayout: InterestPayoutWire.toPrismaOptional(dto.interestPayout),
         bankAccountId: dto.bankAccountId,
         notes: dto.notes,
       },
@@ -198,7 +199,7 @@ export class FixedDepositsService {
       placedOn: new Date(dto.placedOn),
       maturesOn: new Date(dto.maturesOn),
       tenureMonths: dto.tenureMonths,
-      interestPayout: dto.interestPayout,
+      interestPayout: InterestPayoutWire.toPrisma(dto.interestPayout),
       fundId,
       bankAccountId: dto.bankAccountId,
       notes: dto.notes,
@@ -234,7 +235,7 @@ export class FixedDepositsService {
       placedOn: deposit.placedOn.toISOString().slice(0, 10),
       maturesOn: deposit.maturesOn.toISOString().slice(0, 10),
       tenureMonths: deposit.tenureMonths,
-      interestPayout: deposit.interestPayout,
+      interestPayout: InterestPayoutWire.toWire(deposit.interestPayout),
       fundId: deposit.fundId,
       fundName: deposit.fund.nameEn ?? deposit.fund.nameTa,
       status: deposit.status,
