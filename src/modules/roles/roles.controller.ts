@@ -10,7 +10,7 @@ import { RolesService } from './roles.service';
 
 @ApiTags('roles')
 @ApiBearerAuth()
-@RequirePermissions('user:manage')
+@RequirePermissions('role:manage')
 @Controller('roles')
 export class RolesController {
   constructor(private readonly roles: RolesService) {}

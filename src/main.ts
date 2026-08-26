@@ -1,4 +1,4 @@
-import { ValidationPipe, VersioningType } from '@nestjs/common';
+import { BadRequestException, ValidationPipe, VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -28,7 +28,26 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, adapter, {
     bufferLogs: true,
     rawBody: false,
+    // The JSON parser is registered below instead, so an action route that
+    // takes no body is not told its empty body is malformed.
+    bodyParser: false,
   });
+
+  adapter
+    .getInstance()
+    .addContentTypeParser(
+      'application/json',
+      { parseAs: 'string', bodyLimit: 1_048_576 },
+      (_request, payload: string, done: (error: Error | null, body?: unknown) => void) => {
+        if (payload === '') return done(null, undefined);
+
+        try {
+          done(null, JSON.parse(payload) as unknown);
+        } catch {
+          done(new BadRequestException('The request body is not valid JSON'), undefined);
+        }
+      },
+    );
 
   const config = app.get(ConfigService<Env, true>);
   const logger = app.get(Logger);

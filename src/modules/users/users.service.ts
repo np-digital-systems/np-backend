@@ -268,6 +268,30 @@ export class UsersService {
     return user;
   }
 
+  /**
+   * Sign somebody out of every device without touching their account.
+   *
+   * Distinct from deactivating: a phone left at the temple should be revoked
+   * without also stopping the person from signing in tomorrow.
+   */
+  async signOutEverywhere(id: string, context: ActorContext): Promise<{ revoked: number }> {
+    const user = await this.findByIdOrFail(id);
+
+    const { count } = await this.prisma.userSession.updateMany({
+      where: { userId: id, revokedAt: null },
+      data: { revokedAt: new Date() },
+    });
+
+    await this.audit.record(context, {
+      action: 'logout',
+      entity: 'user',
+      entityRef: id,
+      summary: `Signed ${user.fullName ?? user.nameTa} out of ${count} device(s)`,
+    });
+
+    return { revoked: count };
+  }
+
   async setActive(id: string, isActive: boolean, context: ActorContext): Promise<UserView> {
     const before = await this.findByIdOrFail(id);
 
