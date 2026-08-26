@@ -53,6 +53,12 @@ src/
     fixed-deposits/    deposits, renewals and accrued interest
     assets/            the asset register and depreciation
     reports/           trial balance, income statement, summaries
+    event-types/       the registry of recurring temple events
+    events/            the calendar and the yearly schedule
+    sanththa/          the register and its yearly subscriptions
+    notifications/     per-user inbox, fanned out by role
+    audit/             the read side of the audit trail
+    search/            permission-scoped search across the portal
   generated/prisma/    Prisma client output; generated, not committed
 test/                  end-to-end specs
 ```
@@ -62,8 +68,8 @@ handle HTTP and nothing else; services hold the domain logic and are the only
 callers of `PrismaService`. Anything shared by two modules moves to `common/`;
 anything that talks to a system outside the process lives in `infrastructure/`.
 
-Adding a context — events, notifications, the audit-log reader — means adding a
-folder under `modules/` in that shape and importing it in `app.module.ts`.
+Adding a context means adding a folder under `modules/` in that shape and
+importing it in `app.module.ts`.
 
 ## Authentication and authorisation
 
@@ -170,12 +176,57 @@ boundary so the published contract matches the frontend's own types rather than
 leaking the ORM's identifier rules. Its spec asserts every value against the
 list the frontend switches on — if the two ever part company, that suite says so.
 
+## Events
+
+An occurrence's status is read off the calendar, never stored: completed,
+happening today, past and unmarked, or still ahead. Nothing can drift out of step
+with the dates that produced it.
+
+Calendaring an occurrence inherits the standing sponsor of its slot from
+`event_type_sponsors` unless one is named, so the traditional sponsor of a
+Pradosham does not have to be re-entered every year. `GET /events/schedule`
+returns every planned slot of a year whether or not it has been calendared —
+a planning view rather than a list of what exists.
+
+Instance labels follow the frequency: `Week 24`, `Valarpirai`, `Day 3`, and the
+temple's own name for the day wins over any of them.
+
+An event type cannot shrink its year while sponsors or occurrences still sit on
+the slots that would be lost, and a type with history behind it cannot be deleted.
+
+## The sanththa register
+
+There is no members table. A non-null `member_no` **is** membership, because a
+member is a devotee or a sponsor — the register is `users` read through that
+column. Enrolment happens under `/users`; this module owns the yearly
+subscriptions.
+
+`is_active` and `subscribes` are deliberately separate: one means "may sign in",
+the other "still owes the yearly subscription". A member who stops paying keeps
+their login, and a staff member who leaves still owes last year's subscription.
+
+A subscription is one per member per year, never taken by cheque, and may be tied
+to a single posted receipt voucher.
+
+## Notifications and search
+
+Notifications fan out to their audience at publication, so somebody who joins
+tomorrow does not inherit today's alerts. Every signed-in user has an inbox; no
+permission gates reading your own.
+
+Search is scoped by the permission guarding each source's own screen — a cashier
+searching a member's name gets the register row and not the user record. It never
+becomes a side door onto records the caller cannot otherwise open.
+
 ## Audit trail
 
 Every mutation in these modules writes to `audit_log` through `AuditService`:
 sign-in and sign-out, user creation and updates, role and permission changes,
 password resets, and sponsor assignments. Entries carry the actor, their role at
 the time, the source IP, and a field-level diff where one applies.
+
+Accounting, events and subscriptions write there too. `GET /audit` is the read
+side, behind `audit:view`, filterable by actor, action, entity and date.
 
 The table is append-only at the database level, so an audit row cannot be edited
 or deleted by the application — including by this service. An audit write that
@@ -217,6 +268,12 @@ Introduce a shared store before scaling out horizontally.
 | Books | `GET /ledger` `GET /cash-book` `GET /bank-book?bankAccountId=` |
 | Holdings | `/fixed-deposits` (+ `/mature` `/close` `/renew`), `/assets` (+ `/dispose`, `/by-category`) |
 | Reports | `GET /reports/trial-balance` `/income-statement` `/accounting-summary` `/finance-summary` |
+| Event types | `GET /event-types` `POST /event-types` `PATCH /event-types/:id` `DELETE /event-types/:id` |
+| Events | `GET /events` `/events/summary` `/events/schedule` `POST /events` `PATCH /events/:id` `/complete` `/reopen` `DELETE /events/:id` |
+| Sanththa | `GET /sanththa/register` `/summary` `/payments` `POST /sanththa/payments` |
+| Notifications | `GET /notifications` `/counts` `POST /notifications/:id/read` `/read-all` `DELETE /notifications/:id` `POST /notifications` |
+| Audit | `GET /audit` |
+| Search | `GET /search?q=` |
 
 Users and roles require `user:manage`. Sponsors require `event-sponsor:view` to
 read and `event-sponsor:manage` to write or to see contact details. The
@@ -234,8 +291,7 @@ Member numbers are never supplied by a caller: setting `joinedOn` — through
 `POST /users`, `PATCH /users/:id` or `POST /users/:id/enrol` — makes the database
 allocate the next `S-00n`, and it can never be changed afterwards.
 
-Event types themselves are read-only here; their CRUD belongs to the events module,
-which is not built yet. `GET /sponsors` composes each assignment with its event
+`GET /sponsors` composes each assignment with its event
 type, its sponsor, an `instanceLabel` ("Week 24", "Valarpirai", or the temple's own
 name for the day) and the count of dated occurrences it covers this year, matching
 the frontend's `SponsorAssignment` type.
