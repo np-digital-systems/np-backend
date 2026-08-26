@@ -15,7 +15,8 @@ const PERMISSION_GROUPS = [
   { code: 'accounting', label: 'Accounting', description: 'Vouchers, the ledger, books and bank accounts', sortOrder: 2 },
   { code: 'finance', label: 'Funds and property', description: 'Funds, projects, deposits, assets and reports', sortOrder: 3 },
   { code: 'events', label: 'Events', description: 'The calendar, event types and sponsorship', sortOrder: 4 },
-  { code: 'administration', label: 'Administration', description: 'Users, the audit trail and settings', sortOrder: 5 },
+  { code: 'register', label: 'Sanththa register', description: 'Members and their yearly subscriptions', sortOrder: 5 },
+  { code: 'administration', label: 'Administration', description: 'Users, roles, the audit trail and settings', sortOrder: 6 },
 ];
 
 const PERMISSIONS = [
@@ -39,6 +40,8 @@ const PERMISSIONS = [
   ['bank-book:view', 'accounting', 'View the bank book'],
   ['bank-account:view', 'accounting', 'View bank accounts'],
   ['bank-account:manage', 'accounting', 'Open and maintain bank accounts'],
+  ['financial-year:view', 'accounting', 'View financial years'],
+  ['financial-year:manage', 'accounting', 'Open and close financial years'],
 
   ['fund:view', 'finance', 'View funds'],
   ['fund:manage', 'finance', 'Maintain funds'],
@@ -62,7 +65,12 @@ const PERMISSIONS = [
   ['event-sponsor:view', 'events', 'View sponsorship assignments'],
   ['event-sponsor:manage', 'events', 'Assign sponsors and see their contact details'],
 
-  ['user:manage', 'administration', 'Manage users, members and roles'],
+  ['contribution:view', 'register', 'View the sanththa register'],
+  ['contribution:record', 'register', 'Record subscription payments'],
+  ['contribution:manage', 'register', 'Enrol members and see their contact details'],
+
+  ['user:manage', 'administration', 'Manage users and staff accounts'],
+  ['role:manage', 'administration', 'Change what a role may do'],
   ['audit:view', 'administration', 'Read the audit trail'],
   ['settings:manage', 'administration', 'Change portal settings'],
 ] as const;
@@ -85,6 +93,8 @@ const ACCOUNTANT = [
   'fund:view', 'fund:manage', 'project:view', 'project:manage',
   'fixed-deposit:view', 'asset:view', 'asset:manage', 'report:generate',
   'event:view', 'event:export', 'event-schedule:view', 'event-sponsor:view',
+  'financial-year:view',
+  'contribution:view', 'contribution:record', 'contribution:manage',
 ];
 
 const CASHIER = [
@@ -95,6 +105,8 @@ const CASHIER = [
   'voucher:create', 'voucher:submit',
   'cash-book:view',
   'event:view', 'event-schedule:view', 'event-sponsor:view',
+  'financial-year:view',
+  'contribution:view', 'contribution:record',
 ];
 
 const ROLE_PERMISSIONS: Record<string, string[]> = {
