@@ -22,4 +22,10 @@ export class QueryUsersDto extends PaginationQueryDto {
   @Transform(({ value }: { value: unknown }) => value === true || value === 'true')
   @IsBoolean()
   isActive?: boolean;
+
+  @ApiPropertyOptional({ description: 'Restrict to members with an active subscription' })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => value === true || value === 'true')
+  @IsBoolean()
+  subscribes?: boolean;
 }
