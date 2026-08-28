@@ -45,9 +45,12 @@ export class ScheduleSlotDto {
   @ApiProperty({
     type: SponsorUserDto,
     nullable: true,
-    description: 'The standing sponsor, if one is set',
+    description:
+      'The sponsor offered by default — one registered against this instance, else one registered against the whole event type',
   })
   defaultSponsor!: SponsorUserDto | null;
+  @ApiProperty({ description: 'How many registered sponsors stand for this slot' })
+  sponsorCount!: number;
   @ApiProperty({ type: EventRecordDto, nullable: true }) event!: EventRecordDto | null;
 }
 
@@ -98,7 +101,9 @@ export class CreateEventDto {
   @Matches(TIME, { message: 'endTime must be HH:mm' })
   endTime?: string;
 
-  @ApiPropertyOptional({ description: 'Defaults to the standing sponsor for this slot' })
+  @ApiPropertyOptional({
+    description: 'Defaults to this slot’s registered sponsor, when exactly one is registered',
+  })
   @IsOptional()
   @IsUUID()
   sponsorId?: string;
