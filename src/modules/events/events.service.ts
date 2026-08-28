@@ -124,29 +124,36 @@ export class EventsService {
     ]);
 
     const slotKey = (typeId: number, instance: number) => `${typeId}:${instance}`;
-    const standing = new Map(
-      sponsors.map((row) => [slotKey(row.eventTypeId, row.instanceIdentifier), row]),
-    );
     const dated = new Map(
       events.map((row) => [slotKey(row.eventTypeId, row.instanceIdentifier), row]),
     );
 
     return types.map((type) => {
+      // Sponsors registered against the type as a whole stand for every slot;
+      // ones pinned to an instance are preferred where they exist.
+      const typeWide = sponsors.filter(
+        (row) => row.eventTypeId === type.id && row.instanceIdentifier === null,
+      );
+
       const slots = Array.from({ length: type.noOfInstances }, (_, index) => {
         const instanceIdentifier = index + 1;
-        const key = slotKey(type.id, instanceIdentifier);
-        const assignment = standing.get(key);
-        const event = dated.get(key);
+        const pinned = sponsors.filter(
+          (row) => row.eventTypeId === type.id && row.instanceIdentifier === instanceIdentifier,
+        );
+        const candidates = [...pinned, ...typeWide];
+        const assignment = candidates[0];
+        const event = dated.get(slotKey(type.id, instanceIdentifier));
 
         return {
           instanceIdentifier,
           instanceLabel: describeInstance(
             type.frequencyType,
             instanceIdentifier,
-            assignment?.customInstanceName ?? event?.customInstanceName,
+            pinned[0]?.customInstanceName ?? event?.customInstanceName,
           ),
-          customInstanceName: assignment?.customInstanceName ?? event?.customInstanceName ?? null,
+          customInstanceName: pinned[0]?.customInstanceName ?? event?.customInstanceName ?? null,
           defaultSponsor: assignment ? this.toSponsor(assignment.user, canSeeContact) : null,
+          sponsorCount: candidates.length,
           event: event ? this.toRecord(event, canSeeContact) : null,
         };
       });
@@ -175,7 +182,7 @@ export class EventsService {
 
     this.assertTimes(dto.startTime, dto.endTime);
 
-    // An occurrence falls to its slot's standing sponsor unless one is named.
+    // An occurrence falls to its slot's registered sponsor unless one is named.
     const sponsorId =
       dto.sponsorId ?? (await this.standingSponsor(dto.eventTypeId, dto.instanceIdentifier));
 
@@ -296,16 +303,24 @@ export class EventsService {
     });
   }
 
+  /**
+   * The sponsor a new occurrence falls to when none is named.
+   *
+   * Only an unambiguous choice is filled in: a single sponsor pinned to this
+   * instance. Once a slot has several, picking one for the user would be a
+   * guess, so the occurrence is left unsponsored for someone to decide.
+   */
   private async standingSponsor(
     eventTypeId: number,
     instanceIdentifier: number,
   ): Promise<string | undefined> {
-    const assignment = await this.prisma.eventTypeSponsor.findUnique({
-      where: { eventTypeId_instanceIdentifier: { eventTypeId, instanceIdentifier } },
+    const pinned = await this.prisma.eventTypeSponsor.findMany({
+      where: { eventTypeId, instanceIdentifier },
       select: { userId: true },
+      take: 2,
     });
 
-    return assignment?.userId;
+    return pinned.length === 1 ? pinned[0].userId : undefined;
   }
 
   private async assertSponsorIsActive(userId: string): Promise<void> {

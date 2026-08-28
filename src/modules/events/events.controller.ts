@@ -84,7 +84,8 @@ export class EventsController {
   @Post()
   @RequirePermissions('event:create')
   @ApiOperation({
-    summary: 'Put an occurrence on the calendar; it inherits the slot’s standing sponsor',
+    summary:
+      'Put an occurrence on the calendar; it inherits the slot’s sponsor when it has just one',
   })
   create(@Body() dto: CreateEventDto, @Actor() context: ActorContext): Promise<EventRecordDto> {
     return this.events.create(dto, context);
