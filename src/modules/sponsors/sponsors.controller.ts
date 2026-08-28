@@ -43,9 +43,9 @@ export class SponsorsController {
   @Get()
   @RequirePermissions('event-sponsor:view')
   @ApiOperation({
-    summary: 'Standing sponsor assignments',
+    summary: 'Sponsors registered against event types',
     description:
-      'Contact details are omitted from the payload unless you hold event-sponsor:manage — they are withheld at the server, not hidden in the client.',
+      'Filter by eventTypeId, and optionally by instanceIdentifier — which keeps the sponsors registered against the whole type, since they stand for every instance of it. Contact details are omitted from the payload unless you hold event-sponsor:manage; they are withheld at the server, not hidden in the client.',
   })
   async findMany(
     @Query() query: QuerySponsorsDto,
@@ -56,7 +56,7 @@ export class SponsorsController {
 
   @Get('directory')
   @RequirePermissions('event-sponsor:view')
-  @ApiOperation({ summary: 'People who can be assigned as a sponsor' })
+  @ApiOperation({ summary: 'Everyone in the directory who could be registered as a sponsor' })
   async directory(
     @Query() query: QueryDirectoryDto,
     @CurrentUser() user: AuthenticatedUser,
@@ -75,7 +75,10 @@ export class SponsorsController {
 
   @Post()
   @RequirePermissions(MANAGE)
-  @ApiOperation({ summary: 'Assign a sponsor to one instance of an event type' })
+  @ApiOperation({
+    summary: 'Register a sponsor against an event type',
+    description: 'Omit instanceIdentifier to have them stand for every instance of the type.',
+  })
   create(
     @Body() dto: CreateSponsorDto,
     @Actor() context: ActorContext,

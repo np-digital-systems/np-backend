@@ -521,10 +521,13 @@ model EventType {
   @@map("event_types")
 }
 
+/// A sponsor is a person registered against an event type. The instance is
+/// optional: leaving it null means they sponsor the type as a whole and are
+/// offered for any of its instances, rather than one particular slot.
 model EventTypeSponsor {
   id                 Int      @id @default(autoincrement())
   eventTypeId        Int      @map("event_type_id")
-  instanceIdentifier Int      @map("instance_identifier") @db.SmallInt
+  instanceIdentifier Int?     @map("instance_identifier") @db.SmallInt
   customInstanceName String?  @map("custom_instance_name")
   userId             String   @map("user_id") @db.Uuid
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
@@ -532,7 +535,10 @@ model EventTypeSponsor {
   eventType EventType @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
   user      User      @relation(fields: [userId], references: [id])
 
-  @@unique([eventTypeId, instanceIdentifier], map: "one_sponsor_per_slot")
+  // Postgres treats NULLs as distinct, so type-wide rows (null instance) are
+  // deduplicated in the service instead — see SponsorsService.assertNotDuplicate.
+  @@unique([eventTypeId, instanceIdentifier, userId], map: "one_sponsor_per_slot")
+  @@index([eventTypeId, instanceIdentifier], map: "sponsors_by_slot")
   @@index([userId], map: "sponsors_by_user")
   @@map("event_type_sponsors")
 }

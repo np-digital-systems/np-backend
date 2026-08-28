@@ -16,7 +16,7 @@ export class EventTypeDto {
 }
 
 export class EventTypeRecordDto extends EventTypeDto {
-  @ApiProperty({ description: 'Standing sponsor mappings for this type' }) sponsorSlots!: number;
+  @ApiProperty({ description: 'Sponsors registered against this type' }) sponsorSlots!: number;
   @ApiProperty({ description: 'Dated occurrences on the calendar for the active year' })
   scheduledCount!: number;
 }

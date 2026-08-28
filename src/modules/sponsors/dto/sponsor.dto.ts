@@ -1,6 +1,15 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min } from 'class-validator';
+import {
+  IsInt,
+  IsOptional,
+  IsString,
+  IsUUID,
+  Max,
+  MaxLength,
+  Min,
+  ValidateIf,
+} from 'class-validator';
 
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 import { FrequencyType } from '../../../generated/prisma/enums';
@@ -28,7 +37,8 @@ export class EventTypeSummaryDto {
 export class SponsorAssignmentDto {
   @ApiProperty() id!: number;
   @ApiProperty() eventTypeId!: number;
-  @ApiProperty() instanceIdentifier!: number;
+  @ApiProperty({ nullable: true, description: 'Null when the sponsor covers the whole event type' })
+  instanceIdentifier!: number | null;
   @ApiProperty({ nullable: true }) customInstanceName!: string | null;
   @ApiProperty() userId!: string;
   @ApiProperty() createdAt!: Date;
@@ -46,12 +56,17 @@ export class CreateSponsorDto {
   @Min(1)
   eventTypeId!: number;
 
-  @ApiProperty({ minimum: 1, maximum: 366 })
+  @ApiPropertyOptional({
+    minimum: 1,
+    maximum: 366,
+    description: 'Omit to register the sponsor against every instance of the type',
+  })
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
   @Max(366)
-  instanceIdentifier!: number;
+  instanceIdentifier?: number;
 
   @ApiPropertyOptional({ description: "The temple's own name for the day, if it has one" })
   @IsOptional()
@@ -72,6 +87,27 @@ export class UpdateSponsorDto {
 
   @ApiPropertyOptional()
   @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  eventTypeId?: number;
+
+  @ApiPropertyOptional({
+    minimum: 1,
+    maximum: 366,
+    nullable: true,
+    description: 'Send null to widen the sponsor back out to the whole event type',
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(366)
+  instanceIdentifier?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
   @IsString()
   @MaxLength(160)
   customInstanceName?: string;
@@ -84,6 +120,18 @@ export class QuerySponsorsDto {
   @IsInt()
   @Min(1)
   eventTypeId?: number;
+
+  @ApiPropertyOptional({
+    minimum: 1,
+    maximum: 366,
+    description: 'Narrows to sponsors of this instance plus those covering the whole event type',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(366)
+  instanceIdentifier?: number;
 
   @ApiPropertyOptional({
     description: 'Year the occurrence count is measured over; defaults to this year',
