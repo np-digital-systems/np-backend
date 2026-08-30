@@ -40,8 +40,17 @@ export class ReportsService {
     const yearId = await this.resolveYear(financialYearId);
     const sides = await this.ledger.byAccount(yearId);
 
+    /*
+     * A head belongs here if it moved during the year or if it started the year
+     * somewhere. Listing only what moved would let the two totals agree on
+     * movement alone while every balance on the report was wrong, and would
+     * hide an opening position that does not itself balance — which is the one
+     * error a trial balance exists to catch.
+     */
     const accounts = await this.prisma.account.findMany({
-      where: { id: { in: [...sides.keys()] } },
+      where: {
+        OR: [{ id: { in: [...sides.keys()] } }, { openingBalance: { not: 0 } }],
+      },
       orderBy: { code: 'asc' },
     });
 
@@ -50,7 +59,13 @@ export class ReportsService {
 
     const rows = accounts.map((account) => {
       const totals = sides.get(account.id) ?? LedgerQueryService.empty();
-      const net = totals.debit - totals.credit;
+
+      // An opening is held on the head's own natural side, while the columns
+      // below are debit-positive, so a credit-natured opening enters negative.
+      const opening = toRupees(account.openingBalance);
+      const signedOpening = isDebitNatured(account.type) ? opening : -opening;
+
+      const net = signedOpening + totals.debit - totals.credit;
       const debit = net > 0 ? net : 0;
       const credit = net < 0 ? -net : 0;
 
