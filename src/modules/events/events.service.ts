@@ -19,6 +19,7 @@ import {
   ScheduleGroupDto,
   UpdateEventDto,
 } from './dto/event.dto';
+import { PublicEventDto } from './dto/public-event.dto';
 import { deriveEventStatus, isOverdue } from './event-status';
 
 const SPONSOR_SELECT = {
@@ -35,12 +36,20 @@ const EVENT_INCLUDE = {
   sponsor: { select: SPONSOR_SELECT },
 } satisfies Prisma.EventInclude;
 
+/** The public site never joins the sponsor — see PublicEventDto. */
+const PUBLIC_INCLUDE = { eventType: true } satisfies Prisma.EventInclude;
+
 type EventRow = Prisma.EventGetPayload<{ include: typeof EVENT_INCLUDE }>;
+type PublicEventRow = Prisma.EventGetPayload<{ include: typeof PUBLIC_INCLUDE }>;
 type SponsorRow = Prisma.UserGetPayload<{ select: typeof SPONSOR_SELECT }>;
 
 /** `HH:mm` on an arbitrary date — Postgres `time` carries no day. */
 const timeToDate = (value: string): Date => new Date(`1970-01-01T${value}:00Z`);
 const dateToTime = (value: Date): string => value.toISOString().slice(11, 16);
+
+/** `scheduled_date` is a Postgres `date`, so it compares against UTC midnight. */
+const startOfUtcDay = (value: Date): Date =>
+  new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
 
 @Injectable()
 export class EventsService {
@@ -183,6 +192,58 @@ export class EventsService {
         ).length,
       };
     });
+  }
+
+  /**
+   * The next few occurrences, for the public website.
+   *
+   * Completed ones are excluded rather than filtered by date alone: an
+   * occurrence somebody has already closed off is history, even if its date has
+   * not passed in the visitor's timezone yet.
+   */
+  async publicUpcoming(limit = 6, today: Date = new Date()): Promise<PublicEventDto[]> {
+    const events = await this.prisma.event.findMany({
+      where: { scheduledDate: { gte: startOfUtcDay(today) }, isCompleted: false },
+      include: PUBLIC_INCLUDE,
+      orderBy: [{ scheduledDate: 'asc' }, { startTime: 'asc' }],
+      take: limit,
+    });
+
+    return events.map((event) => this.toPublic(event));
+  }
+
+  /**
+   * Every occurrence in a window, for the website's calendar.
+   *
+   * The window is capped so an anonymous caller cannot ask for the whole table
+   * in one request; the site only ever paints a couple of years of months.
+   */
+  async publicCalendar(from?: string, to?: string, today: Date = new Date()): Promise<PublicEventDto[]> {
+    const year = today.getUTCFullYear();
+
+    const start = from ? new Date(from) : new Date(Date.UTC(year, 0, 1));
+    const requestedEnd = to ? new Date(to) : new Date(Date.UTC(year + 2, 0, 1));
+    const ceiling = new Date(
+      Date.UTC(start.getUTCFullYear() + 3, start.getUTCMonth(), start.getUTCDate()),
+    );
+
+    const events = await this.prisma.event.findMany({
+      where: {
+        scheduledDate: { gte: start, lte: requestedEnd < ceiling ? requestedEnd : ceiling },
+      },
+      include: PUBLIC_INCLUDE,
+      orderBy: [{ scheduledDate: 'asc' }, { startTime: 'asc' }],
+    });
+
+    return events.map((event) => this.toPublic(event));
+  }
+
+  async publicFindOneOrFail(id: number): Promise<PublicEventDto> {
+    const event = await this.prisma.event.findUnique({ where: { id }, include: PUBLIC_INCLUDE });
+
+    if (!event) throw new NotFoundException(`Event ${id} was not found`);
+
+    return this.toPublic(event);
   }
 
   async create(dto: CreateEventDto, context: ActorContext): Promise<EventRecordDto> {
@@ -388,6 +449,23 @@ export class EventsService {
       email: canSeeContact ? row.email : null,
       phone: canSeeContact ? row.phone : null,
       address: row.address,
+    };
+  }
+
+  private toPublic(event: PublicEventRow): PublicEventDto {
+    return {
+      id: event.id,
+      eventTypeId: event.eventTypeId,
+      nameTa: event.eventType.nameTa,
+      nameEn: event.eventType.nameEn ?? event.eventType.nameTa,
+      frequencyType: event.eventType.frequencyType,
+      instanceIdentifier: event.instanceIdentifier,
+      customInstanceName: event.customInstanceName,
+      scheduledDate: event.scheduledDate.toISOString().slice(0, 10),
+      startTime: dateToTime(event.startTime),
+      endTime: event.endTime ? dateToTime(event.endTime) : null,
+      notes: event.notes,
+      isCompleted: event.isCompleted,
     };
   }
 
