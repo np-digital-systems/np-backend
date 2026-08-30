@@ -36,8 +36,11 @@ const EVENT_INCLUDE = {
   sponsor: { select: SPONSOR_SELECT },
 } satisfies Prisma.EventInclude;
 
-/** The public site never joins the sponsor — see PublicEventDto. */
-const PUBLIC_INCLUDE = { eventType: true } satisfies Prisma.EventInclude;
+/** The public site sees a sponsor's name and nothing else — see PublicEventDto. */
+const PUBLIC_INCLUDE = {
+  eventType: true,
+  sponsor: { select: { nameTa: true, fullName: true } },
+} satisfies Prisma.EventInclude;
 
 type EventRow = Prisma.EventGetPayload<{ include: typeof EVENT_INCLUDE }>;
 type PublicEventRow = Prisma.EventGetPayload<{ include: typeof PUBLIC_INCLUDE }>;
@@ -468,6 +471,8 @@ export class EventsService {
       scheduledDate: event.scheduledDate.toISOString().slice(0, 10),
       startTime: dateToTime(event.startTime),
       endTime: event.endTime ? dateToTime(event.endTime) : null,
+      sponsorNameTa: event.sponsor?.nameTa ?? null,
+      sponsorNameEn: event.sponsor ? (event.sponsor.fullName ?? event.sponsor.nameTa) : null,
       notes: event.notes,
       isCompleted: event.isCompleted,
     };
