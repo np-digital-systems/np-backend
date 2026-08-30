@@ -218,7 +218,11 @@ export class EventsService {
    * The window is capped so an anonymous caller cannot ask for the whole table
    * in one request; the site only ever paints a couple of years of months.
    */
-  async publicCalendar(from?: string, to?: string, today: Date = new Date()): Promise<PublicEventDto[]> {
+  async publicCalendar(
+    from?: string,
+    to?: string,
+    today: Date = new Date(),
+  ): Promise<PublicEventDto[]> {
     const year = today.getUTCFullYear();
 
     const start = from ? new Date(from) : new Date(Date.UTC(year, 0, 1));
