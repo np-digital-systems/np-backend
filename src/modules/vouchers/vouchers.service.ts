@@ -40,8 +40,19 @@ const VOUCHER_INCLUDE = {
 
 type VoucherRow = Prisma.VoucherGetPayload<{ include: typeof VOUCHER_INCLUDE }>;
 
-/** Which statuses a voucher may still be edited or cancelled in. */
-const EDITABLE: VoucherStatus[] = [VoucherStatus.Draft, VoucherStatus.Rejected];
+/*
+ * Which statuses a voucher may still be edited or cancelled in.
+ *
+ * An entry waiting on an approver is still editable: update() sends it back to
+ * Draft and clears the submission, so a correction has to be resubmitted and
+ * nobody can approve a version they never read. Approved and posted entries are
+ * absent by design — those are corrected by a further entry, not a rewrite.
+ */
+const EDITABLE: VoucherStatus[] = [
+  VoucherStatus.Draft,
+  VoucherStatus.PendingApproval,
+  VoucherStatus.Rejected,
+];
 const CANCELLABLE: VoucherStatus[] = [VoucherStatus.Draft, VoucherStatus.PendingApproval];
 
 @Injectable()
