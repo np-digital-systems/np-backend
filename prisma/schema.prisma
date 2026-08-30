@@ -562,6 +562,7 @@ model Event {
   vouchers  Voucher[]
 
   @@index([scheduledDate], map: "events_calendar")
+  @@index([eventTypeId, instanceIdentifier], map: "events_by_slot")
   @@index([sponsorId], map: "events_sponsor")
   @@map("events")
 }
