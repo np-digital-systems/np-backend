@@ -124,9 +124,23 @@ export class EventsService {
     ]);
 
     const slotKey = (typeId: number, instance: number) => `${typeId}:${instance}`;
-    const dated = new Map(
-      events.map((row) => [slotKey(row.eventTypeId, row.instanceIdentifier), row]),
-    );
+
+    // A slot can hold several dates in a year — a monthly type has one instance
+    // and twelve occurrences — so the events are grouped rather than indexed,
+    // and the earliest stands for the slot.
+    const dated = new Map<string, typeof events>();
+
+    for (const row of events) {
+      const key = slotKey(row.eventTypeId, row.instanceIdentifier);
+      const group = dated.get(key);
+
+      if (group) group.push(row);
+      else dated.set(key, [row]);
+    }
+
+    for (const group of dated.values()) {
+      group.sort((a, b) => a.scheduledDate.getTime() - b.scheduledDate.getTime());
+    }
 
     return types.map((type) => {
       // Sponsors registered against the type as a whole stand for every slot;
@@ -142,7 +156,8 @@ export class EventsService {
         );
         const candidates = [...pinned, ...typeWide];
         const assignment = candidates[0];
-        const event = dated.get(slotKey(type.id, instanceIdentifier));
+        const occurrences = dated.get(slotKey(type.id, instanceIdentifier)) ?? [];
+        const event = occurrences[0];
 
         return {
           instanceIdentifier,
@@ -154,6 +169,7 @@ export class EventsService {
           customInstanceName: pinned[0]?.customInstanceName ?? event?.customInstanceName ?? null,
           defaultSponsor: assignment ? this.toSponsor(assignment.user, canSeeContact) : null,
           sponsorCount: candidates.length,
+          eventCount: occurrences.length,
           event: event ? this.toRecord(event, canSeeContact) : null,
         };
       });
