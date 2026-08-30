@@ -1,6 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
-import { IsDateString, IsNumber, IsOptional, IsString, Matches, Min } from 'class-validator';
+import { IsDateString, IsOptional, IsString, Matches } from 'class-validator';
 
 import { FinancialYearStatus } from '../../../generated/prisma/enums';
 
@@ -11,7 +10,11 @@ export class FinancialYearDto {
   @ApiProperty() endsOn!: string;
   @ApiProperty({ enum: FinancialYearStatus }) status!: FinancialYearStatus;
   @ApiProperty() isCurrent!: boolean;
-  @ApiProperty() openingBalance!: number;
+  @ApiProperty({
+    description:
+      'Opening cash and bank, summed from the chart of accounts. Frozen on close; live figure while open',
+  })
+  openingBalance!: number;
   @ApiProperty({ nullable: true, description: 'Frozen on close; live figure while open' })
   income!: number | null;
   @ApiProperty({ nullable: true }) expenses!: number | null;
@@ -34,12 +37,10 @@ export class CreateFinancialYearDto {
   @IsDateString()
   endsOn!: string;
 
-  @ApiPropertyOptional({ description: 'Carried in from the previous year' })
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  openingBalance?: number;
+  /*
+   * No openingBalance here on purpose. It is summed from the opening balances
+   * on the cash and bank heads, so there is nothing for the caller to supply.
+   */
 }
 
 export class QueryFinancialYearsDto {

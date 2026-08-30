@@ -11,6 +11,7 @@ import { Prisma } from '../../generated/prisma/client';
 import { AccountType, FinancialYearStatus, VoucherStatus } from '../../generated/prisma/enums';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
+import { SettingsService } from '../settings/settings.service';
 import {
   CreateFinancialYearDto,
   FinancialYearDto,
@@ -19,11 +20,14 @@ import {
 
 type YearRow = Prisma.FinancialYearGetPayload<Record<string, never>>;
 
+const round = (value: number) => Math.round(value * 100) / 100;
+
 @Injectable()
 export class FinancialYearsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly settings: SettingsService,
   ) {}
 
   async findMany(query: QueryFinancialYearsDto): Promise<FinancialYearDto[]> {
@@ -83,7 +87,8 @@ export class FinancialYearsService {
         label: dto.label,
         startsOn,
         endsOn,
-        openingBalance: dto.openingBalance ?? 0,
+        // Not taken from the request: the opening position is read from the
+        // chart of accounts while the year runs, and frozen here on close.
         status: FinancialYearStatus.upcoming,
       },
     });
@@ -157,13 +162,17 @@ export class FinancialYearsService {
       );
     }
 
-    const totals = await this.liveTotals(year);
+    const [totals, openingBalance] = await Promise.all([
+      this.liveTotals(year),
+      this.openingPosition(),
+    ]);
 
     const closed = await this.prisma.financialYear.update({
       where: { id },
       data: {
         status: FinancialYearStatus.closed,
         isCurrent: false,
+        openingBalance,
         income: totals.income,
         expenses: totals.expenses,
         voucherCount: totals.voucherCount,
@@ -181,6 +190,37 @@ export class FinancialYearsService {
     });
 
     return this.toDto(closed);
+  }
+
+  /**
+   * The money the year starts with: the opening on the cash head plus the
+   * opening on every bank account's ledger head.
+   *
+   * Derived rather than typed in when the year is created, because a figure
+   * entered by hand can drift from the chart of accounts the books are read
+   * from — and then two screens disagree about the same money. The heads are
+   * gathered exactly as the dashboard gathers them, so the year's opening and
+   * the cash and bank tiles cannot tell different stories.
+   */
+  private async openingPosition(): Promise<number> {
+    const [bankAccounts, { cashAccountId }] = await Promise.all([
+      this.prisma.bankAccount.findMany({ select: { ledgerAccountId: true } }),
+      this.settings.accounting(),
+    ]);
+
+    const ids = [
+      ...bankAccounts.map((account) => account.ledgerAccountId),
+      ...(cashAccountId === null ? [] : [cashAccountId]),
+    ];
+
+    if (ids.length === 0) return 0;
+
+    const heads = await this.prisma.account.findMany({
+      where: { id: { in: ids } },
+      select: { openingBalance: true },
+    });
+
+    return round(heads.reduce((sum, head) => sum + toRupees(head.openingBalance), 0));
   }
 
   private async liveTotals(
@@ -235,6 +275,10 @@ export class FinancialYearsService {
         }
       : await this.liveTotals(year);
 
+    // The opening follows the same rule as the totals beside it: a live read
+    // of the chart of accounts while the year runs, the snapshot once closed.
+    const openingBalance = frozen ? toRupees(year.openingBalance) : await this.openingPosition();
+
     const surplus =
       totals.income === null || totals.expenses === null
         ? null
@@ -247,7 +291,7 @@ export class FinancialYearsService {
       endsOn: year.endsOn.toISOString().slice(0, 10),
       status: year.status,
       isCurrent: year.isCurrent,
-      openingBalance: toRupees(year.openingBalance),
+      openingBalance,
       income: totals.income,
       expenses: totals.expenses,
       surplus,
