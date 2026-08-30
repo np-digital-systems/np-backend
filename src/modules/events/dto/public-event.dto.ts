@@ -7,12 +7,15 @@ import { FrequencyType } from '../../../generated/prisma/enums';
 /**
  * An occurrence as the public website is allowed to see it.
  *
- * Deliberately not `EventRecordDto`: no sponsor, no audit stamps, no derived
- * `isOverdue`. Who paid for a pooja and which occurrences nobody has closed off
- * are the temple's business, not a visitor's. Both names travel so the site can
- * render the calendar in whichever language the visitor chose, and the raw
- * `frequencyType` / `instanceIdentifier` travel instead of a rendered English
- * label so the site can phrase "Week 24" in Tamil too.
+ * Deliberately not `EventRecordDto`: no audit stamps, no derived `isOverdue`,
+ * and of the sponsor only their name. A temple names the family who gave for a
+ * pooja on its notice board, so the name is public by intent; their email,
+ * phone and address are not, and never leave this shape.
+ *
+ * Both event-type names travel so the site can render the calendar in whichever
+ * language the visitor chose, and the raw `frequencyType` / `instanceIdentifier`
+ * travel instead of a rendered English label so the site can phrase "Week 24"
+ * in Tamil too.
  */
 export class PublicEventDto {
   @ApiProperty() id!: number;
@@ -28,6 +31,16 @@ export class PublicEventDto {
   @ApiProperty({ example: '2026-10-01' }) scheduledDate!: string;
   @ApiProperty({ example: '18:30' }) startTime!: string;
   @ApiProperty({ nullable: true, example: '20:00' }) endTime!: string | null;
+  @ApiProperty({
+    nullable: true,
+    description: 'Tamil name of whoever is sponsoring this occurrence; null when nobody is',
+  })
+  sponsorNameTa!: string | null;
+  @ApiProperty({
+    nullable: true,
+    description: 'English name of the sponsor; falls back to the Tamil one when unset',
+  })
+  sponsorNameEn!: string | null;
   @ApiProperty({ nullable: true, description: 'The public description of the occurrence' })
   notes!: string | null;
   @ApiProperty() isCompleted!: boolean;
