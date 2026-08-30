@@ -51,6 +51,10 @@ export class ScheduleSlotDto {
   defaultSponsor!: SponsorUserDto | null;
   @ApiProperty({ description: 'How many registered sponsors stand for this slot' })
   sponsorCount!: number;
+  @ApiProperty({
+    description: 'Dates scheduled against this slot this year; a monthly slot carries several',
+  })
+  eventCount!: number;
   @ApiProperty({ type: EventRecordDto, nullable: true }) event!: EventRecordDto | null;
 }
 
