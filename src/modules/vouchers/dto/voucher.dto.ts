@@ -1,6 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
   IsDateString,
   IsEnum,
   IsIn,
@@ -12,6 +15,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateNested,
 } from 'class-validator';
 
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
@@ -28,6 +32,68 @@ export class VoucherActorDto {
   @ApiProperty() name!: string;
 }
 
+export class VoucherLineDto {
+  @ApiProperty() id!: number;
+  @ApiProperty({ description: 'Order on the document, from 1' }) lineNo!: number;
+  @ApiProperty() accountId!: number;
+  @ApiProperty() amount!: number;
+  @ApiProperty() fundId!: number;
+  @ApiProperty({ nullable: true }) projectId!: number | null;
+  @ApiProperty({ nullable: true, description: 'What this line was for' })
+  activityId!: number | null;
+  @ApiProperty({ nullable: true }) note!: string | null;
+  @ApiProperty({ type: AccountRefDto }) account!: AccountRefDto;
+  @ApiProperty({ type: FundRefDto }) fund!: FundRefDto;
+  @ApiProperty({ type: ProjectRefDto, nullable: true }) project!: ProjectRefDto | null;
+}
+
+/**
+ * One head a voucher is coded to.
+ *
+ * There is no side here: every line of a receipt credits income and every line
+ * of a payment debits expenditure, which follows from the voucher's kind. The
+ * contra against cash or bank is generated when the voucher is posted.
+ */
+export class WriteVoucherLineDto {
+  @ApiProperty({ description: 'The income or expense head this line hits' })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  accountId!: number;
+
+  @ApiProperty({ minimum: 0.01 })
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @IsPositive()
+  amount!: number;
+
+  @ApiProperty({ description: 'The fund this line is carried in' })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  fundId!: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  projectId?: number | null;
+
+  @ApiPropertyOptional({ description: 'What this line was for — a pooja, a service' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  activityId?: number | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  note?: string | null;
+}
+
 export class VoucherDto {
   @ApiProperty() id!: number;
   @ApiProperty({ example: 'RV-2026-0125' }) ref!: string;
@@ -35,12 +101,10 @@ export class VoucherDto {
   @ApiProperty() financialYearId!: number;
   @ApiProperty() date!: string;
   @ApiProperty() description!: string;
-  @ApiProperty() amount!: number;
-  @ApiProperty() accountId!: number;
-  @ApiProperty() fundId!: number;
-  @ApiProperty({ nullable: true }) projectId!: number | null;
-  @ApiProperty({ nullable: true, description: 'What the entry was for' })
-  activityId!: number | null;
+  @ApiProperty({ description: 'The document total, summed from its lines' })
+  amount!: number;
+  @ApiProperty({ type: () => [VoucherLineDto], description: 'The heads this voucher is coded to' })
+  lines!: VoucherLineDto[];
   @ApiProperty({ nullable: true, description: 'Who the entry was with' })
   partyId!: number | null;
   @ApiProperty({ enum: PaymentMode }) mode!: PaymentMode;
@@ -60,9 +124,6 @@ export class VoucherDto {
 }
 
 export class VoucherRecordDto extends VoucherDto {
-  @ApiProperty({ type: AccountRefDto }) account!: AccountRefDto;
-  @ApiProperty({ type: FundRefDto }) fund!: FundRefDto;
-  @ApiProperty({ type: ProjectRefDto, nullable: true }) project!: ProjectRefDto | null;
   @ApiProperty({ type: BankAccountRefDto, nullable: true }) bankAccount!: BankAccountRefDto | null;
 }
 
@@ -81,37 +142,16 @@ export class CreateVoucherDto {
   @MaxLength(500)
   description!: string;
 
-  @ApiProperty({ minimum: 0.01 })
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @IsPositive()
-  amount!: number;
-
-  @ApiProperty({ description: 'The income or expense head this voucher hits' })
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  accountId!: number;
-
-  @ApiProperty()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  fundId!: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  projectId?: number;
-
-  @ApiPropertyOptional({ description: 'What the entry was for — a pooja, a service, upkeep' })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  activityId?: number;
+  @ApiProperty({
+    type: [WriteVoucherLineDto],
+    description: 'The heads this voucher is coded to. At least one; the total is their sum',
+  })
+  @IsArray()
+  @ArrayMinSize(1, { message: 'A voucher needs at least one head' })
+  @ArrayMaxSize(50)
+  @ValidateNested({ each: true })
+  @Type(() => WriteVoucherLineDto)
+  lines!: WriteVoucherLineDto[];
 
   @ApiPropertyOptional({
     description: 'Who the entry was with. The typed `party` name is kept alongside it',
