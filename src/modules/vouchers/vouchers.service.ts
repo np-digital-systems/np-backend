@@ -152,9 +152,6 @@ export class VouchersService {
         partyId: dto.partyId,
         party: dto.party,
         manualVoucherNo: dto.manualVoucherNo,
-        eventRef: dto.eventRef,
-        eventTypeId: dto.eventTypeId,
-        eventId: dto.eventId,
         notes: dto.notes,
         status: VoucherStatus.Draft,
         createdBy: context.actor.id,
@@ -211,7 +208,6 @@ export class VouchersService {
           partyId: dto.partyId ?? null,
           party: dto.party,
           manualVoucherNo: dto.manualVoucherNo ?? null,
-          eventRef: dto.eventRef ?? null,
           notes: dto.notes ?? null,
           status: VoucherStatus.Draft,
           rejectionReason: null,
@@ -467,7 +463,7 @@ export class VouchersService {
       fundId: line.fundId,
       projectId: line.projectId ?? null,
       activityId: line.activityId ?? null,
-      note: line.note ?? null,
+      eventId: line.eventId ?? null,
     }));
   }
 
@@ -601,7 +597,7 @@ export class VouchersService {
         fundId: line.fundId,
         projectId: line.projectId,
         activityId: line.activityId,
-        note: line.note,
+        eventId: line.eventId,
         account: toAccountRef(line.account),
         fund: toFundRef(line.fund),
         project: line.project ? toProjectRef(line.project) : null,
@@ -611,7 +607,6 @@ export class VouchersService {
       bankAccountId: voucher.bankAccountId,
       chequeNo: voucher.chequeNo,
       party: voucher.party,
-      eventRef: voucher.eventRef,
       status: VoucherStatusWire.toWire(voucher.status),
       notes: voucher.notes,
       createdBy: actor(voucher.createdByUser)!,
