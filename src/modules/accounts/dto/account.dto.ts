@@ -27,6 +27,11 @@ export class AccountDto extends AccountRefDto {
   @ApiProperty() isPostable!: boolean;
   @ApiProperty() isActive!: boolean;
   @ApiProperty() openingBalance!: number;
+  @ApiProperty({
+    nullable: true,
+    description: 'Party offered whenever this head is chosen — a kurukkal on his honorarium',
+  })
+  defaultPartyId!: number | null;
   @ApiProperty() createdAt!: Date;
 }
 
@@ -75,6 +80,13 @@ export class CreateAccountDto {
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   openingBalance?: number;
+
+  @ApiPropertyOptional({ description: 'Offered whenever this head is chosen' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  defaultPartyId?: number | null;
 }
 
 export class UpdateAccountDto extends PartialType(
