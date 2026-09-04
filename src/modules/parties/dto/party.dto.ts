@@ -49,12 +49,6 @@ export class CreatePartyDto {
   @IsString()
   @MaxLength(32)
   phone?: string | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(1000)
-  notes?: string | null;
 }
 
 export class UpdatePartyDto extends PartialType(CreatePartyDto) {

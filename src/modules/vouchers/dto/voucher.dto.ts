@@ -41,7 +41,8 @@ export class VoucherLineDto {
   @ApiProperty({ nullable: true }) projectId!: number | null;
   @ApiProperty({ nullable: true, description: 'What this line was for' })
   activityId!: number | null;
-  @ApiProperty({ nullable: true }) note!: string | null;
+  @ApiProperty({ nullable: true, description: 'The occurrence this line is for' })
+  eventId!: number | null;
   @ApiProperty({ type: AccountRefDto }) account!: AccountRefDto;
   @ApiProperty({ type: FundRefDto }) fund!: FundRefDto;
   @ApiProperty({ type: ProjectRefDto, nullable: true }) project!: ProjectRefDto | null;
@@ -87,11 +88,14 @@ export class WriteVoucherLineDto {
   @Min(1)
   activityId?: number | null;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({
+    description: 'The occurrence this line is for — which Friday, not merely a Friday',
+  })
   @IsOptional()
-  @IsString()
-  @MaxLength(200)
-  note?: string | null;
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  eventId?: number | null;
 }
 
 export class VoucherDto {
@@ -111,7 +115,6 @@ export class VoucherDto {
   @ApiProperty({ nullable: true }) bankAccountId!: number | null;
   @ApiProperty({ nullable: true }) chequeNo!: string | null;
   @ApiProperty({ description: 'Payer for a receipt, payee for a payment' }) party!: string;
-  @ApiProperty({ nullable: true }) eventRef!: string | null;
   @ApiProperty({ enum: VoucherStatusWire.values }) status!: WireVoucherStatus;
   @ApiProperty({ nullable: true }) notes!: string | null;
   @ApiProperty({ type: VoucherActorDto }) createdBy!: VoucherActorDto;
@@ -190,24 +193,6 @@ export class CreateVoucherDto {
   @IsString()
   @MaxLength(60)
   manualVoucherNo?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(120)
-  eventRef?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  eventTypeId?: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  eventId?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
