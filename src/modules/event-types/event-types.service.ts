@@ -135,7 +135,8 @@ export class EventTypesService {
 
     const [events, vouchers] = await Promise.all([
       this.prisma.event.count({ where: { eventTypeId: id } }),
-      this.prisma.voucher.count({ where: { eventTypeId: id } }),
+      // A voucher reaches a pooja type through the occurrence on its lines.
+      this.prisma.voucherLine.count({ where: { event: { eventTypeId: id } } }),
     ]);
 
     if (events > 0 || vouchers > 0) {

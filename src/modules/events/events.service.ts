@@ -369,7 +369,7 @@ export class EventsService {
 
     if (!event) throw new NotFoundException(`Event ${id} was not found`);
 
-    const vouchers = await this.prisma.voucher.count({ where: { eventId: id } });
+    const vouchers = await this.prisma.voucherLine.count({ where: { eventId: id } });
 
     if (vouchers > 0) {
       throw new ConflictException(
