@@ -6,6 +6,8 @@ export interface PostingLine {
   debit: number | null;
   credit: number | null;
   bankAccountId: number | null;
+  /** Whether the analytical dimensions belong on this line. */
+  carriesDimensions: boolean;
 }
 
 export interface PostingInput {
@@ -40,6 +42,10 @@ export function buildPostingLines(input: PostingInput): PostingLine[] {
       debit: amount,
       credit: null,
       bankAccountId: isReceipt ? bankAccountId : null,
+      // The analytical side is the head the clerk chose; the other is where
+      // the money physically sat. Dimensions belong on the former only —
+      // carried on both, an activity would net to nil and report nothing.
+      carriesDimensions: !isReceipt,
     },
     {
       lineNo: 2,
@@ -47,6 +53,7 @@ export function buildPostingLines(input: PostingInput): PostingLine[] {
       debit: null,
       credit: amount,
       bankAccountId: isReceipt ? null : bankAccountId,
+      carriesDimensions: isReceipt,
     },
   ];
 }
