@@ -24,6 +24,10 @@ const PERMISSIONS = [
 
   ['account:view', 'accounting', 'View the chart of accounts'],
   ['account:manage', 'accounting', 'Maintain the chart of accounts'],
+  ['activity:view', 'accounting', 'View activities and what each brought in or cost'],
+  ['activity:manage', 'accounting', 'Maintain the list of activities'],
+  ['party:view', 'accounting', 'View parties and what each contributed or was paid'],
+  ['party:manage', 'accounting', 'Maintain the list of parties'],
   ['transaction:view', 'accounting', 'View posted transactions'],
   ['transaction:create', 'accounting', 'Record transactions'],
   ['transaction:export', 'accounting', 'Export transactions'],
@@ -85,6 +89,8 @@ const ROLES = [
 const ACCOUNTANT = [
   'dashboard:view',
   'account:view', 'account:manage',
+  'activity:view', 'activity:manage',
+  'party:view', 'party:manage',
   'transaction:view', 'transaction:create', 'transaction:export',
   'receipt-voucher:view', 'receipt-voucher:create',
   'payment-voucher:view', 'payment-voucher:create',
@@ -99,6 +105,7 @@ const ACCOUNTANT = [
 
 const CASHIER = [
   'dashboard:view',
+  'activity:view', 'party:view',
   'transaction:view', 'transaction:create',
   'receipt-voucher:view', 'receipt-voucher:create',
   'payment-voucher:view', 'payment-voucher:create',
