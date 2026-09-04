@@ -11,6 +11,16 @@ export class EventTypeDto {
   @ApiProperty({ enum: FrequencyType }) frequencyType!: FrequencyType;
   @ApiProperty({ description: 'How many instances a full year of this type contains' })
   noOfInstances!: number;
+  @ApiProperty({
+    nullable: true,
+    description: 'Fund a receipt for this pooja is carried in, offered by default',
+  })
+  defaultFundId!: number | null;
+  @ApiProperty({
+    nullable: true,
+    description: 'Project the receipt is coded to, offered by default',
+  })
+  defaultProjectId!: number | null;
   @ApiProperty() createdAt!: Date;
   @ApiProperty() updatedAt!: Date;
 }
@@ -43,6 +53,22 @@ export class CreateEventTypeDto {
   @Min(1)
   @Max(366)
   noOfInstances!: number;
+
+  @ApiPropertyOptional({ description: 'Fund a receipt for this pooja is carried in' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  defaultFundId?: number | null;
+
+  @ApiPropertyOptional({
+    description: 'Project the receipt is coded to; must sit in the fund above',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  defaultProjectId?: number | null;
 }
 
 export class UpdateEventTypeDto extends PartialType(CreateEventTypeDto) {}
