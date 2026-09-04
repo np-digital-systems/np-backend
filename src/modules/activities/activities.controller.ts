@@ -22,11 +22,6 @@ import {
   UpdateActivityDto,
 } from './dto/activity.dto';
 
-/*
- * Activities are chart-of-accounts-adjacent master data, so they are governed
- * by the same capability as the chart itself rather than a new one — which
- * also means no role needs re-seeding before this can be used.
- */
 @ApiTags('activities')
 @ApiBearerAuth()
 @Controller('activities')
@@ -34,20 +29,20 @@ export class ActivitiesController {
   constructor(private readonly activities: ActivitiesService) {}
 
   @Get()
-  @RequirePermissions('account:view')
+  @RequirePermissions('activity:view')
   @ApiOperation({ summary: 'What entries are coded to — poojas, services and general upkeep' })
   findMany(@Query() query: QueryActivitiesDto): Promise<ActivityRecordDto[]> {
     return this.activities.findMany(query);
   }
 
   @Get(':id')
-  @RequirePermissions('account:view')
+  @RequirePermissions('activity:view')
   findOne(@Param('id', ParseIntPipe) id: number): Promise<ActivityRecordDto> {
     return this.activities.findOneOrFail(id);
   }
 
   @Post()
-  @RequirePermissions('account:manage')
+  @RequirePermissions('activity:manage')
   @ApiOperation({ summary: 'Add an activity — a new pooja needs no schema change' })
   create(
     @Body() dto: CreateActivityDto,
@@ -57,7 +52,7 @@ export class ActivitiesController {
   }
 
   @Patch(':id')
-  @RequirePermissions('account:manage')
+  @RequirePermissions('activity:manage')
   update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateActivityDto,
@@ -67,7 +62,7 @@ export class ActivitiesController {
   }
 
   @Delete(':id')
-  @RequirePermissions('account:manage')
+  @RequirePermissions('activity:manage')
   @ApiOperation({ summary: 'Retire an activity; posted entries keep naming it' })
   deactivate(
     @Param('id', ParseIntPipe) id: number,
