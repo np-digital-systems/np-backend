@@ -11,6 +11,7 @@ import {
   MinLength,
 } from 'class-validator';
 
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '../../../common/password';
 import { UserRole } from '../../../generated/prisma/enums';
 
 export class CreateUserDto {
@@ -38,8 +39,8 @@ export class CreateUserDto {
   @ApiPropertyOptional({ description: 'Required for every role except "user"' })
   @IsOptional()
   @IsString()
-  @MinLength(8)
-  @MaxLength(128)
+  @MinLength(PASSWORD_MIN_LENGTH)
+  @MaxLength(PASSWORD_MAX_LENGTH)
   password?: string;
 
   @ApiPropertyOptional()
