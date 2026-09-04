@@ -340,7 +340,7 @@ model Account {
   children     Account[]     @relation("AccountTree")
   defaultParty Party?        @relation(fields: [defaultPartyId], references: [id])
   bankAccount  BankAccount?
-  vouchers     Voucher[]
+  voucherLines VoucherLine[]
   ledgerLines  LedgerEntry[]
 
   @@index([parentId], map: "accounts_parent")
@@ -355,12 +355,12 @@ model Fund {
   isActive       Boolean  @default(true) @map("is_active")
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  projects    Project[]
-  vouchers    Voucher[]
-  ledgerLines LedgerEntry[]
-  deposits    FixedDeposit[]
-  assets      Asset[]
-  activities  Activity[]
+  projects     Project[]
+  voucherLines VoucherLine[]
+  ledgerLines  LedgerEntry[]
+  deposits     FixedDeposit[]
+  assets       Asset[]
+  activities   Activity[]
 
   @@map("funds")
 }
@@ -377,9 +377,9 @@ model Project {
   description String        @default("")
   isActive    Boolean       @default(true) @map("is_active")
 
-  fund        Fund          @relation(fields: [fundId], references: [id])
-  vouchers    Voucher[]
-  ledgerLines LedgerEntry[]
+  fund         Fund          @relation(fields: [fundId], references: [id])
+  voucherLines VoucherLine[]
+  ledgerLines  LedgerEntry[]
 
   @@index([fundId, status], map: "projects_fund")
   @@map("projects")
@@ -410,9 +410,9 @@ model Activity {
   defaultFund Fund?         @relation(fields: [defaultFundId], references: [id])
   parent      Activity?     @relation("ActivityTree", fields: [parentId], references: [id])
   children    Activity[]    @relation("ActivityTree")
-  eventTypes  EventType[]
-  vouchers    Voucher[]
-  ledgerLines LedgerEntry[]
+  eventTypes   EventType[]
+  voucherLines VoucherLine[]
+  ledgerLines  LedgerEntry[]
 
   @@index([kind, isActive], map: "activities_kind")
   @@index([parentId], map: "activities_parent")
@@ -480,16 +480,14 @@ model Voucher {
   financialYearId Int           @map("financial_year_id")
   date            DateTime      @db.Date
   description     String
+  // The document total, summed from its lines. Stored rather than derived so
+  // a register of five thousand vouchers does not aggregate to list them.
   amount          Decimal       @db.Decimal(14, 2)
-  accountId       Int           @map("account_id")
-  fundId          Int           @map("fund_id")
-  projectId       Int?          @map("project_id")
   mode            PaymentMode
   bankAccountId   Int?          @map("bank_account_id")
   chequeNo        String?       @map("cheque_no")
-  // What it was for and who it was with. Both optional: a bank transfer
-  // between the temple's own accounts is for nothing and with nobody.
-  activityId      Int?          @map("activity_id")
+  // Who the entry was with. On the header rather than the lines: a receipt has
+  // one payer even when it is split across three heads.
   partyId         Int?          @map("party_id")
   // The name as it stood when the entry was made. Kept alongside partyId so a
   // walk-in donor needs no record, and so a party later renamed or reassigned
@@ -510,12 +508,9 @@ model Voucher {
   postedAt        DateTime?     @map("posted_at") @db.Timestamptz(6)
 
   financialYear   FinancialYear     @relation(fields: [financialYearId], references: [id])
-  account         Account           @relation(fields: [accountId], references: [id])
-  fund            Fund              @relation(fields: [fundId], references: [id])
-  project         Project?          @relation(fields: [projectId], references: [id])
-  activity        Activity?         @relation(fields: [activityId], references: [id])
   partyRef        Party?            @relation(fields: [partyId], references: [id])
   bankAccount     BankAccount?      @relation(fields: [bankAccountId], references: [id])
+  lines           VoucherLine[]
   eventType       EventType?        @relation(fields: [eventTypeId], references: [id])
   event           Event?            @relation(fields: [eventId], references: [id])
   createdByUser   User              @relation("VoucherCreatedBy", fields: [createdBy], references: [id])
@@ -527,6 +522,44 @@ model Voucher {
   @@index([kind, date(sort: Desc)], map: "vouchers_kind_date")
   @@index([party(ops: raw("gin_trgm_ops"))], map: "vouchers_party", type: Gin)
   @@map("vouchers")
+}
+
+/*
+ * One head a voucher is coded to, and the amount going to it.
+ *
+ * A receipt for five thousand rupees of which two are earmarked for annadhanam
+ * is one document with two lines — one reference, one signature, one piece of
+ * paper — where before it could only be two vouchers pretending to be
+ * unrelated.
+ *
+ * There is no debit/credit column here because a voucher is not a general
+ * journal: every line of a receipt is a credit to income, every line of a
+ * payment a debit to expenditure, and the side follows from `voucher.kind`.
+ * The contra against cash or bank is generated at posting, split by fund so
+ * each fund's cash balances within itself.
+ */
+model VoucherLine {
+  id         BigInt   @id @default(autoincrement())
+  voucherId  BigInt   @map("voucher_id")
+  lineNo     Int      @map("line_no") @db.SmallInt
+  accountId  Int      @map("account_id")
+  amount     Decimal  @db.Decimal(14, 2)
+  fundId     Int      @map("fund_id")
+  projectId  Int?     @map("project_id")
+  activityId Int?     @map("activity_id")
+  note       String?
+
+  voucher  Voucher   @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  account  Account   @relation(fields: [accountId], references: [id])
+  fund     Fund      @relation(fields: [fundId], references: [id])
+  project  Project?  @relation(fields: [projectId], references: [id])
+  activity Activity? @relation(fields: [activityId], references: [id])
+
+  @@unique([voucherId, lineNo], map: "voucher_line_no")
+  @@index([accountId], map: "voucher_lines_account")
+  @@index([activityId], map: "voucher_lines_activity")
+  @@index([fundId], map: "voucher_lines_fund")
+  @@map("voucher_lines")
 }
 
 model VoucherSequence {
