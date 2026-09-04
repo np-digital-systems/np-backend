@@ -13,14 +13,9 @@ export class EventTypeDto {
   noOfInstances!: number;
   @ApiProperty({
     nullable: true,
-    description: 'Fund a receipt for this pooja is carried in, offered by default',
+    description: 'Activity a receipt for this pooja is coded to; it carries the fund in turn',
   })
-  defaultFundId!: number | null;
-  @ApiProperty({
-    nullable: true,
-    description: 'Project the receipt is coded to, offered by default',
-  })
-  defaultProjectId!: number | null;
+  activityId!: number | null;
   @ApiProperty() createdAt!: Date;
   @ApiProperty() updatedAt!: Date;
 }
@@ -54,21 +49,14 @@ export class CreateEventTypeDto {
   @Max(366)
   noOfInstances!: number;
 
-  @ApiPropertyOptional({ description: 'Fund a receipt for this pooja is carried in' })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  defaultFundId?: number | null;
-
   @ApiPropertyOptional({
-    description: 'Project the receipt is coded to; must sit in the fund above',
+    description: 'Activity a receipt for this pooja is coded to; it carries the fund in turn',
   })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  defaultProjectId?: number | null;
+  activityId?: number | null;
 }
 
 export class UpdateEventTypeDto extends PartialType(CreateEventTypeDto) {}
