@@ -130,6 +130,34 @@ enum FrequencyType {
   @@map("frequency_type")
 }
 
+/*
+ * What an activity is, so the list can be grouped and filtered. A pooja is the
+ * one every temple has; the rest exist so hall rental and general upkeep have
+ * somewhere to sit without a schema change.
+ */
+enum ActivityKind {
+  pooja
+  service
+  facility
+  general
+
+  @@map("activity_kind")
+}
+
+/*
+ * Where a party stands in relation to the temple. Kept deliberately coarse —
+ * a person may sponsor a pooja one year and supply flowers the next, and the
+ * label is for grouping a list, not for controlling what they may appear on.
+ */
+enum PartyKind {
+  sponsor
+  staff
+  vendor
+  devotee
+
+  @@map("party_kind")
+}
+
 enum FinancialYearStatus {
   open
   closed
@@ -205,6 +233,7 @@ model User {
   auditEntries        AuditLog[]
   notifications       NotificationRecipient[]
   settingsUpdated     Setting[]
+  party               Party?
 
   @@map("users")
 }
@@ -302,15 +331,20 @@ model Account {
   isPostable     Boolean     @default(true) @map("is_postable")
   isActive       Boolean     @default(true) @map("is_active")
   openingBalance Decimal     @default(0) @map("opening_balance") @db.Decimal(14, 2)
+  // Offered when this head is chosen. A kurukkal honorarium is always paid to
+  // the same person, so the head remembers rather than the clerk retyping.
+  defaultPartyId Int?        @map("default_party_id")
   createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
 
   parent       Account?      @relation("AccountTree", fields: [parentId], references: [id])
   children     Account[]     @relation("AccountTree")
+  defaultParty Party?        @relation(fields: [defaultPartyId], references: [id])
   bankAccount  BankAccount?
-  vouchers     Voucher[]
+  voucherLines VoucherLine[]
   ledgerLines  LedgerEntry[]
 
   @@index([parentId], map: "accounts_parent")
+  @@index([defaultPartyId], map: "accounts_default_party")
   @@map("accounts")
 }
 
@@ -322,12 +356,12 @@ model Fund {
   isActive       Boolean  @default(true) @map("is_active")
   createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  projects    Project[]
-  vouchers    Voucher[]
-  ledgerLines LedgerEntry[]
-  deposits    FixedDeposit[]
-  assets      Asset[]
-  eventTypes  EventType[]
+  projects     Project[]
+  voucherLines VoucherLine[]
+  ledgerLines  LedgerEntry[]
+  deposits     FixedDeposit[]
+  assets       Asset[]
+  activities   Activity[]
 
   @@map("funds")
 }
@@ -344,13 +378,75 @@ model Project {
   description String        @default("")
   isActive    Boolean       @default(true) @map("is_active")
 
-  fund        Fund          @relation(fields: [fundId], references: [id])
-  vouchers    Voucher[]
-  ledgerLines LedgerEntry[]
-  eventTypes  EventType[]
+  fund         Fund          @relation(fields: [fundId], references: [id])
+  voucherLines VoucherLine[]
+  ledgerLines  LedgerEntry[]
 
   @@index([fundId, status], map: "projects_fund")
   @@map("projects")
+}
+
+/*
+ * An activity: what an entry was for.
+ *
+ * The temple's answer to a cost centre. Both income and expenditure carry one,
+ * which is what lets a pooja be read as a whole — sponsorship in against
+ * priest time out — where an income head alone can only ever show one side.
+ *
+ * A new pooja, a new festival, a hall let out for a wedding: each is a row
+ * somebody adds, never a column somebody migrates.
+ */
+model Activity {
+  id            Int          @id @default(autoincrement())
+  nameTa        String       @unique(map: "activities_name_ta_key") @map("name_ta")
+  nameEn        String?      @map("name_en")
+  kind          ActivityKind @default(general)
+  // Offered when the activity is chosen, so a clerk answers it once here
+  // rather than on every receipt. Still editable on the voucher.
+  defaultFundId Int?         @map("default_fund_id")
+  isActive      Boolean      @default(true) @map("is_active")
+  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  defaultFund  Fund?         @relation(fields: [defaultFundId], references: [id])
+  eventTypes   EventType[]
+  voucherLines VoucherLine[]
+  ledgerLines  LedgerEntry[]
+
+  @@index([kind, isActive], map: "activities_kind")
+  @@index([defaultFundId], map: "activities_default_fund")
+  @@map("activities")
+}
+
+/*
+ * A party: who an entry was with.
+ *
+ * The subsidiary ledger. People never become heads in the chart of accounts —
+ * the chart says what kind of money moved, a party says who it moved with —
+ * so one `5200 Salaries` head serves every kurukkal and melam player, and
+ * "what did we pay him this year" is a grouping rather than another account.
+ *
+ * `userId` is set for anyone who also signs in, which is how a sponsor on the
+ * calendar and a payer on a receipt are known to be the same person. A vendor
+ * who will never log in simply has none.
+ */
+model Party {
+  id        Int       @id @default(autoincrement())
+  nameTa    String    @map("name_ta")
+  nameEn    String?   @map("name_en")
+  kind      PartyKind @default(devotee)
+  userId    String?   @unique(map: "parties_user_id_key") @map("user_id") @db.Uuid
+  phone     String?
+  isActive  Boolean   @default(true) @map("is_active")
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user            User?         @relation(fields: [userId], references: [id])
+  vouchers        Voucher[]
+  ledgerLines     LedgerEntry[]
+  defaultForHeads Account[]
+
+  @@index([kind, isActive], map: "parties_kind")
+  @@index([nameTa(ops: raw("gin_trgm_ops"))], map: "parties_name", type: Gin)
+  @@map("parties")
 }
 
 model BankAccount {
@@ -381,18 +477,20 @@ model Voucher {
   financialYearId Int           @map("financial_year_id")
   date            DateTime      @db.Date
   description     String
+  // The document total, summed from its lines. Stored rather than derived so
+  // a register of five thousand vouchers does not aggregate to list them.
   amount          Decimal       @db.Decimal(14, 2)
-  accountId       Int           @map("account_id")
-  fundId          Int           @map("fund_id")
-  projectId       Int?          @map("project_id")
   mode            PaymentMode
   bankAccountId   Int?          @map("bank_account_id")
   chequeNo        String?       @map("cheque_no")
+  // Who the entry was with. On the header rather than the lines: a receipt has
+  // one payer even when it is split across three heads.
+  partyId         Int?          @map("party_id")
+  // The name as it stood when the entry was made. Kept alongside partyId so a
+  // walk-in donor needs no record, and so a party later renamed or reassigned
+  // cannot rewrite what a posted receipt says.
   party           String
   manualVoucherNo String?       @map("manual_voucher_no")
-  eventRef        String?       @map("event_ref")
-  eventTypeId     Int?          @map("event_type_id")
-  eventId         Int?          @map("event_id")
   status          VoucherStatus @default(Draft)
   notes           String?
   createdBy       String        @map("created_by") @db.Uuid
@@ -404,12 +502,9 @@ model Voucher {
   postedAt        DateTime?     @map("posted_at") @db.Timestamptz(6)
 
   financialYear   FinancialYear     @relation(fields: [financialYearId], references: [id])
-  account         Account           @relation(fields: [accountId], references: [id])
-  fund            Fund              @relation(fields: [fundId], references: [id])
-  project         Project?          @relation(fields: [projectId], references: [id])
+  partyRef        Party?            @relation(fields: [partyId], references: [id])
   bankAccount     BankAccount?      @relation(fields: [bankAccountId], references: [id])
-  eventType       EventType?        @relation(fields: [eventTypeId], references: [id])
-  event           Event?            @relation(fields: [eventId], references: [id])
+  lines           VoucherLine[]
   createdByUser   User              @relation("VoucherCreatedBy", fields: [createdBy], references: [id])
   decidedByUser   User?             @relation("VoucherDecidedBy", fields: [decidedBy], references: [id])
   ledgerEntries   LedgerEntry[]
@@ -417,8 +512,54 @@ model Voucher {
 
   @@index([financialYearId, date(sort: Desc)], map: "vouchers_year_date")
   @@index([kind, date(sort: Desc)], map: "vouchers_kind_date")
-  @@index([party(ops: raw("gin_trgm_ops"))], map: "vouchers_party", type: Gin)
+  @@index([partyId], map: "vouchers_party")
+  @@index([bankAccountId], map: "vouchers_bank_account")
+  @@index([createdBy], map: "vouchers_created_by")
+  @@index([party(ops: raw("gin_trgm_ops"))], map: "vouchers_party_text", type: Gin)
   @@map("vouchers")
+}
+
+/*
+ * One head a voucher is coded to, and the amount going to it.
+ *
+ * A receipt for five thousand rupees of which two are earmarked for annadhanam
+ * is one document with two lines — one reference, one signature, one piece of
+ * paper — where before it could only be two vouchers pretending to be
+ * unrelated.
+ *
+ * There is no debit/credit column here because a voucher is not a general
+ * journal: every line of a receipt is a credit to income, every line of a
+ * payment a debit to expenditure, and the side follows from `voucher.kind`.
+ * The contra against cash or bank is generated at posting, split by fund so
+ * each fund's cash balances within itself.
+ */
+model VoucherLine {
+  id         BigInt   @id @default(autoincrement())
+  voucherId  BigInt   @map("voucher_id")
+  lineNo     Int      @map("line_no") @db.SmallInt
+  accountId  Int      @map("account_id")
+  amount     Decimal  @db.Decimal(14, 2)
+  fundId     Int      @map("fund_id")
+  projectId  Int?     @map("project_id")
+  activityId Int?     @map("activity_id")
+  // The occurrence this line is for, where the activity alone is not precise
+  // enough — which Friday, not merely that it was a Friday abhishekam.
+  eventId    Int?     @map("event_id")
+
+  voucher  Voucher   @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  account  Account   @relation(fields: [accountId], references: [id])
+  fund     Fund      @relation(fields: [fundId], references: [id])
+  project  Project?  @relation(fields: [projectId], references: [id])
+  activity Activity? @relation(fields: [activityId], references: [id])
+  event    Event?    @relation(fields: [eventId], references: [id])
+
+  @@unique([voucherId, lineNo], map: "voucher_line_no")
+  @@index([accountId], map: "voucher_lines_account")
+  @@index([activityId], map: "voucher_lines_activity")
+  @@index([fundId], map: "voucher_lines_fund")
+  @@index([projectId], map: "voucher_lines_project")
+  @@index([eventId], map: "voucher_lines_event")
+  @@map("voucher_lines")
 }
 
 model VoucherSequence {
@@ -441,6 +582,11 @@ model LedgerEntry {
   accountId     Int      @map("account_id")
   fundId        Int      @map("fund_id")
   projectId     Int?     @map("project_id")
+  // Carried only on the income or expense line, never on its cash or bank
+  // contra. Both sides bearing the same activity would net to nil and every
+  // activity would report zero.
+  activityId    Int?     @map("activity_id")
+  partyId       Int?     @map("party_id")
   debit         Decimal? @db.Decimal(14, 2)
   credit        Decimal? @db.Decimal(14, 2)
   bankAccountId Int?     @map("bank_account_id")
@@ -449,11 +595,17 @@ model LedgerEntry {
   account     Account      @relation(fields: [accountId], references: [id])
   fund        Fund         @relation(fields: [fundId], references: [id])
   project     Project?     @relation(fields: [projectId], references: [id])
+  activity    Activity?    @relation(fields: [activityId], references: [id])
+  party       Party?       @relation(fields: [partyId], references: [id])
   bankAccount BankAccount? @relation(fields: [bankAccountId], references: [id])
 
   @@unique([voucherId, lineNo], map: "voucher_line")
   @@index([accountId, date], map: "ledger_account_date")
   @@index([fundId, date], map: "ledger_fund_date")
+  @@index([projectId], map: "ledger_entries_project")
+  @@index([bankAccountId], map: "ledger_entries_bank_account")
+  @@index([activityId, date], map: "ledger_activity_date")
+  @@index([partyId, date], map: "ledger_party_date")
   @@index([date], map: "ledger_date")
   @@map("ledger_entries")
 }
@@ -516,19 +668,16 @@ model EventType {
   createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  // Where receipts for this pooja are carried. Recorded once here so a clerk
-  // raising the receipt does not re-answer it for every occurrence.
-  defaultFundId    Int? @map("default_fund_id")
-  defaultProjectId Int? @map("default_project_id")
+  // The activity a receipt for this pooja is coded to. The activity carries
+  // the fund in turn, so choosing the pooja settles both.
+  activityId Int? @map("activity_id")
 
-  defaultFund    Fund?    @relation(fields: [defaultFundId], references: [id])
-  defaultProject Project? @relation(fields: [defaultProjectId], references: [id])
+  activity Activity? @relation(fields: [activityId], references: [id])
 
   sponsors EventTypeSponsor[]
   events   Event[]
-  vouchers Voucher[]
 
-  @@index([defaultFundId], map: "event_types_default_fund")
+  @@index([activityId], map: "event_types_activity")
   @@map("event_types")
 }
 
@@ -568,9 +717,9 @@ model Event {
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  eventType EventType @relation(fields: [eventTypeId], references: [id])
-  sponsor   User?     @relation(fields: [sponsorId], references: [id])
-  vouchers  Voucher[]
+  eventType    EventType     @relation(fields: [eventTypeId], references: [id])
+  sponsor      User?         @relation(fields: [sponsorId], references: [id])
+  voucherLines VoucherLine[]
 
   @@index([scheduledDate], map: "events_calendar")
   @@index([eventTypeId, instanceIdentifier], map: "events_by_slot")

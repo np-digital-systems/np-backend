@@ -16,6 +16,7 @@ import { AuditModule } from './infrastructure/audit/audit.module';
 import { PrismaModule } from './infrastructure/prisma/prisma.module';
 import { AuthModule } from './modules/auth/auth.module';
 import { AccountsModule } from './modules/accounts/accounts.module';
+import { ActivitiesModule } from './modules/activities/activities.module';
 import { AuditReaderModule } from './modules/audit/audit-reader.module';
 import { AssetsModule } from './modules/assets/assets.module';
 import { BankAccountsModule } from './modules/bank-accounts/bank-accounts.module';
@@ -24,6 +25,7 @@ import { FixedDepositsModule } from './modules/fixed-deposits/fixed-deposits.mod
 import { EventTypesModule } from './modules/event-types/event-types.module';
 import { EventsModule } from './modules/events/events.module';
 import { FundsModule } from './modules/funds/funds.module';
+import { PartiesModule } from './modules/parties/parties.module';
 import { LedgerModule } from './modules/ledger/ledger.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { ProjectsModule } from './modules/projects/projects.module';
@@ -114,6 +116,8 @@ function prettyTransport(
     SettingsModule,
     FinancialYearsModule,
     AccountsModule,
+    ActivitiesModule,
+    PartiesModule,
     FundsModule,
     ProjectsModule,
     BankAccountsModule,

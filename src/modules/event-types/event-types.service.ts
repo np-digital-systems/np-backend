@@ -67,7 +67,7 @@ export class EventTypesService {
   }
 
   async create(dto: CreateEventTypeDto, context: ActorContext): Promise<EventTypeRecordDto> {
-    await this.assertDefaultCoding(dto.defaultFundId ?? null, dto.defaultProjectId ?? null);
+    await this.assertActivityIsUsable(dto.activityId ?? null);
 
     const type = await this.prisma.eventType.create({
       data: {
@@ -75,8 +75,7 @@ export class EventTypesService {
         nameEn: dto.nameEn,
         frequencyType: dto.frequencyType,
         noOfInstances: dto.noOfInstances,
-        defaultFundId: dto.defaultFundId ?? null,
-        defaultProjectId: dto.defaultProjectId ?? null,
+        activityId: dto.activityId ?? null,
       },
     });
 
@@ -103,17 +102,9 @@ export class EventTypesService {
       await this.assertNoSlotsBeyond(id, dto.noOfInstances);
     }
 
-    /*
-     * Validated against what the row will hold, not what the request carried:
-     * moving the fund alone must still be checked against the project already
-     * on the type, or the pair could be left pointing at different funds.
-     */
-    const defaultFundId =
-      dto.defaultFundId === undefined ? before.defaultFundId : (dto.defaultFundId ?? null);
-    const defaultProjectId =
-      dto.defaultProjectId === undefined ? before.defaultProjectId : (dto.defaultProjectId ?? null);
+    const activityId = dto.activityId === undefined ? before.activityId : (dto.activityId ?? null);
 
-    await this.assertDefaultCoding(defaultFundId, defaultProjectId);
+    await this.assertActivityIsUsable(activityId);
 
     const type = await this.prisma.eventType.update({
       where: { id },
@@ -122,8 +113,7 @@ export class EventTypesService {
         nameEn: dto.nameEn,
         frequencyType: dto.frequencyType,
         noOfInstances: dto.noOfInstances,
-        defaultFundId,
-        defaultProjectId,
+        activityId,
       },
     });
 
@@ -145,7 +135,8 @@ export class EventTypesService {
 
     const [events, vouchers] = await Promise.all([
       this.prisma.event.count({ where: { eventTypeId: id } }),
-      this.prisma.voucher.count({ where: { eventTypeId: id } }),
+      // A voucher reaches a pooja type through the occurrence on its lines.
+      this.prisma.voucherLine.count({ where: { event: { eventTypeId: id } } }),
     ]);
 
     if (events > 0 || vouchers > 0) {
@@ -168,29 +159,16 @@ export class EventTypesService {
    * A default is a suggestion, but a wrong one is worse than none: it would put
    * every receipt for the pooja against a project in the wrong fund, quietly.
    */
-  private async assertDefaultCoding(
-    fundId: number | null,
-    projectId: number | null,
-  ): Promise<void> {
-    if (fundId !== null) {
-      const fund = await this.prisma.fund.findUnique({ where: { id: fundId } });
+  /** The activity carries the fund in turn, so only the activity is checked. */
+  private async assertActivityIsUsable(activityId: number | null): Promise<void> {
+    if (activityId === null) return;
 
-      if (!fund) throw new NotFoundException(`Fund ${fundId} was not found`);
-      if (!fund.isActive) throw new ConflictException(`Fund ${fund.nameTa} is closed`);
-    }
+    const activity = await this.prisma.activity.findUnique({ where: { id: activityId } });
 
-    if (projectId === null) return;
+    if (!activity) throw new NotFoundException(`Activity ${activityId} was not found`);
 
-    if (fundId === null) {
-      throw new ConflictException('A default project needs the fund it is carried in');
-    }
-
-    const project = await this.prisma.project.findUnique({ where: { id: projectId } });
-
-    if (!project) throw new NotFoundException(`Project ${projectId} was not found`);
-
-    if (project.fundId !== fundId) {
-      throw new ConflictException(`${project.nameTa} is not carried in the fund chosen above`);
+    if (!activity.isActive) {
+      throw new ConflictException(`${activity.nameTa} is no longer an active activity`);
     }
   }
 
@@ -232,8 +210,7 @@ export class EventTypesService {
       nameEn: type.nameEn ?? '',
       frequencyType: type.frequencyType,
       noOfInstances: type.noOfInstances,
-      defaultFundId: type.defaultFundId,
-      defaultProjectId: type.defaultProjectId,
+      activityId: type.activityId,
       createdAt: type.createdAt,
       updatedAt: type.updatedAt,
       sponsorSlots,
