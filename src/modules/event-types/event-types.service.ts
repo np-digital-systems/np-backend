@@ -67,12 +67,16 @@ export class EventTypesService {
   }
 
   async create(dto: CreateEventTypeDto, context: ActorContext): Promise<EventTypeRecordDto> {
+    await this.assertDefaultCoding(dto.defaultFundId ?? null, dto.defaultProjectId ?? null);
+
     const type = await this.prisma.eventType.create({
       data: {
         nameTa: dto.nameTa,
         nameEn: dto.nameEn,
         frequencyType: dto.frequencyType,
         noOfInstances: dto.noOfInstances,
+        defaultFundId: dto.defaultFundId ?? null,
+        defaultProjectId: dto.defaultProjectId ?? null,
       },
     });
 
@@ -99,6 +103,18 @@ export class EventTypesService {
       await this.assertNoSlotsBeyond(id, dto.noOfInstances);
     }
 
+    /*
+     * Validated against what the row will hold, not what the request carried:
+     * moving the fund alone must still be checked against the project already
+     * on the type, or the pair could be left pointing at different funds.
+     */
+    const defaultFundId =
+      dto.defaultFundId === undefined ? before.defaultFundId : (dto.defaultFundId ?? null);
+    const defaultProjectId =
+      dto.defaultProjectId === undefined ? before.defaultProjectId : (dto.defaultProjectId ?? null);
+
+    await this.assertDefaultCoding(defaultFundId, defaultProjectId);
+
     const type = await this.prisma.eventType.update({
       where: { id },
       data: {
@@ -106,6 +122,8 @@ export class EventTypesService {
         nameEn: dto.nameEn,
         frequencyType: dto.frequencyType,
         noOfInstances: dto.noOfInstances,
+        defaultFundId,
+        defaultProjectId,
       },
     });
 
@@ -146,6 +164,36 @@ export class EventTypesService {
     });
   }
 
+  /**
+   * A default is a suggestion, but a wrong one is worse than none: it would put
+   * every receipt for the pooja against a project in the wrong fund, quietly.
+   */
+  private async assertDefaultCoding(
+    fundId: number | null,
+    projectId: number | null,
+  ): Promise<void> {
+    if (fundId !== null) {
+      const fund = await this.prisma.fund.findUnique({ where: { id: fundId } });
+
+      if (!fund) throw new NotFoundException(`Fund ${fundId} was not found`);
+      if (!fund.isActive) throw new ConflictException(`Fund ${fund.nameTa} is closed`);
+    }
+
+    if (projectId === null) return;
+
+    if (fundId === null) {
+      throw new ConflictException('A default project needs the fund it is carried in');
+    }
+
+    const project = await this.prisma.project.findUnique({ where: { id: projectId } });
+
+    if (!project) throw new NotFoundException(`Project ${projectId} was not found`);
+
+    if (project.fundId !== fundId) {
+      throw new ConflictException(`${project.nameTa} is not carried in the fund chosen above`);
+    }
+  }
+
   /** Shrinking a year would orphan sponsors and events sitting on the lost slots. */
   private async assertNoSlotsBeyond(id: number, noOfInstances: number): Promise<void> {
     const [sponsors, events] = await Promise.all([
@@ -184,6 +232,8 @@ export class EventTypesService {
       nameEn: type.nameEn ?? '',
       frequencyType: type.frequencyType,
       noOfInstances: type.noOfInstances,
+      defaultFundId: type.defaultFundId,
+      defaultProjectId: type.defaultProjectId,
       createdAt: type.createdAt,
       updatedAt: type.updatedAt,
       sponsorSlots,

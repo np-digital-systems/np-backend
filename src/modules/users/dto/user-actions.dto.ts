@@ -9,6 +9,7 @@ import {
   MinLength,
 } from 'class-validator';
 
+import { PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH } from '../../../common/password';
 import { UserRole } from '../../../generated/prisma/enums';
 
 export class ChangeRoleDto {
@@ -18,10 +19,10 @@ export class ChangeRoleDto {
 }
 
 export class ResetPasswordDto {
-  @ApiProperty({ minLength: 12 })
+  @ApiProperty({ minLength: PASSWORD_MIN_LENGTH })
   @IsString()
-  @MinLength(12)
-  @MaxLength(128)
+  @MinLength(PASSWORD_MIN_LENGTH)
+  @MaxLength(PASSWORD_MAX_LENGTH)
   password!: string;
 }
 

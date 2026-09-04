@@ -327,6 +327,7 @@ model Fund {
   ledgerLines LedgerEntry[]
   deposits    FixedDeposit[]
   assets      Asset[]
+  eventTypes  EventType[]
 
   @@map("funds")
 }
@@ -346,6 +347,7 @@ model Project {
   fund        Fund          @relation(fields: [fundId], references: [id])
   vouchers    Voucher[]
   ledgerLines LedgerEntry[]
+  eventTypes  EventType[]
 
   @@index([fundId, status], map: "projects_fund")
   @@map("projects")
@@ -514,10 +516,19 @@ model EventType {
   createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  // Where receipts for this pooja are carried. Recorded once here so a clerk
+  // raising the receipt does not re-answer it for every occurrence.
+  defaultFundId    Int? @map("default_fund_id")
+  defaultProjectId Int? @map("default_project_id")
+
+  defaultFund    Fund?    @relation(fields: [defaultFundId], references: [id])
+  defaultProject Project? @relation(fields: [defaultProjectId], references: [id])
+
   sponsors EventTypeSponsor[]
   events   Event[]
   vouchers Voucher[]
 
+  @@index([defaultFundId], map: "event_types_default_fund")
   @@map("event_types")
 }
 
