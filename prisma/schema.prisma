@@ -344,6 +344,7 @@ model Account {
   ledgerLines  LedgerEntry[]
 
   @@index([parentId], map: "accounts_parent")
+  @@index([defaultPartyId], map: "accounts_default_party")
   @@map("accounts")
 }
 
@@ -403,19 +404,16 @@ model Activity {
   // Offered when the activity is chosen, so a clerk answers it once here
   // rather than on every receipt. Still editable on the voucher.
   defaultFundId Int?         @map("default_fund_id")
-  parentId      Int?         @map("parent_id")
   isActive      Boolean      @default(true) @map("is_active")
   createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  defaultFund Fund?         @relation(fields: [defaultFundId], references: [id])
-  parent      Activity?     @relation("ActivityTree", fields: [parentId], references: [id])
-  children    Activity[]    @relation("ActivityTree")
+  defaultFund  Fund?         @relation(fields: [defaultFundId], references: [id])
   eventTypes   EventType[]
   voucherLines VoucherLine[]
   ledgerLines  LedgerEntry[]
 
   @@index([kind, isActive], map: "activities_kind")
-  @@index([parentId], map: "activities_parent")
+  @@index([defaultFundId], map: "activities_default_fund")
   @@map("activities")
 }
 
@@ -438,7 +436,6 @@ model Party {
   kind      PartyKind @default(devotee)
   userId    String?   @unique(map: "parties_user_id_key") @map("user_id") @db.Uuid
   phone     String?
-  notes     String?
   isActive  Boolean   @default(true) @map("is_active")
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
@@ -494,9 +491,6 @@ model Voucher {
   // cannot rewrite what a posted receipt says.
   party           String
   manualVoucherNo String?       @map("manual_voucher_no")
-  eventRef        String?       @map("event_ref")
-  eventTypeId     Int?          @map("event_type_id")
-  eventId         Int?          @map("event_id")
   status          VoucherStatus @default(Draft)
   notes           String?
   createdBy       String        @map("created_by") @db.Uuid
@@ -511,8 +505,6 @@ model Voucher {
   partyRef        Party?            @relation(fields: [partyId], references: [id])
   bankAccount     BankAccount?      @relation(fields: [bankAccountId], references: [id])
   lines           VoucherLine[]
-  eventType       EventType?        @relation(fields: [eventTypeId], references: [id])
-  event           Event?            @relation(fields: [eventId], references: [id])
   createdByUser   User              @relation("VoucherCreatedBy", fields: [createdBy], references: [id])
   decidedByUser   User?             @relation("VoucherDecidedBy", fields: [decidedBy], references: [id])
   ledgerEntries   LedgerEntry[]
@@ -520,7 +512,10 @@ model Voucher {
 
   @@index([financialYearId, date(sort: Desc)], map: "vouchers_year_date")
   @@index([kind, date(sort: Desc)], map: "vouchers_kind_date")
-  @@index([party(ops: raw("gin_trgm_ops"))], map: "vouchers_party", type: Gin)
+  @@index([partyId], map: "vouchers_party")
+  @@index([bankAccountId], map: "vouchers_bank_account")
+  @@index([createdBy], map: "vouchers_created_by")
+  @@index([party(ops: raw("gin_trgm_ops"))], map: "vouchers_party_text", type: Gin)
   @@map("vouchers")
 }
 
@@ -547,18 +542,23 @@ model VoucherLine {
   fundId     Int      @map("fund_id")
   projectId  Int?     @map("project_id")
   activityId Int?     @map("activity_id")
-  note       String?
+  // The occurrence this line is for, where the activity alone is not precise
+  // enough — which Friday, not merely that it was a Friday abhishekam.
+  eventId    Int?     @map("event_id")
 
   voucher  Voucher   @relation(fields: [voucherId], references: [id], onDelete: Cascade)
   account  Account   @relation(fields: [accountId], references: [id])
   fund     Fund      @relation(fields: [fundId], references: [id])
   project  Project?  @relation(fields: [projectId], references: [id])
   activity Activity? @relation(fields: [activityId], references: [id])
+  event    Event?    @relation(fields: [eventId], references: [id])
 
   @@unique([voucherId, lineNo], map: "voucher_line_no")
   @@index([accountId], map: "voucher_lines_account")
   @@index([activityId], map: "voucher_lines_activity")
   @@index([fundId], map: "voucher_lines_fund")
+  @@index([projectId], map: "voucher_lines_project")
+  @@index([eventId], map: "voucher_lines_event")
   @@map("voucher_lines")
 }
 
@@ -602,6 +602,8 @@ model LedgerEntry {
   @@unique([voucherId, lineNo], map: "voucher_line")
   @@index([accountId, date], map: "ledger_account_date")
   @@index([fundId, date], map: "ledger_fund_date")
+  @@index([projectId], map: "ledger_entries_project")
+  @@index([bankAccountId], map: "ledger_entries_bank_account")
   @@index([activityId, date], map: "ledger_activity_date")
   @@index([partyId, date], map: "ledger_party_date")
   @@index([date], map: "ledger_date")
@@ -674,7 +676,6 @@ model EventType {
 
   sponsors EventTypeSponsor[]
   events   Event[]
-  vouchers Voucher[]
 
   @@index([activityId], map: "event_types_activity")
   @@map("event_types")
@@ -716,9 +717,9 @@ model Event {
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  eventType EventType @relation(fields: [eventTypeId], references: [id])
-  sponsor   User?     @relation(fields: [sponsorId], references: [id])
-  vouchers  Voucher[]
+  eventType    EventType     @relation(fields: [eventTypeId], references: [id])
+  sponsor      User?         @relation(fields: [sponsorId], references: [id])
+  voucherLines VoucherLine[]
 
   @@index([scheduledDate], map: "events_calendar")
   @@index([eventTypeId, instanceIdentifier], map: "events_by_slot")
