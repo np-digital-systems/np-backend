@@ -141,6 +141,8 @@ export class VouchersService {
         mode: dto.mode,
         bankAccountId: dto.bankAccountId,
         chequeNo: dto.chequeNo,
+        activityId: dto.activityId,
+        partyId: dto.partyId,
         party: dto.party,
         manualVoucherNo: dto.manualVoucherNo,
         eventRef: dto.eventRef,
@@ -193,6 +195,8 @@ export class VouchersService {
         mode: dto.mode,
         bankAccountId: dto.bankAccountId ?? null,
         chequeNo: dto.chequeNo ?? null,
+        activityId: dto.activityId ?? null,
+        partyId: dto.partyId ?? null,
         party: dto.party,
         manualVoucherNo: dto.manualVoucherNo ?? null,
         eventRef: dto.eventRef ?? null,
@@ -355,6 +359,9 @@ export class VouchersService {
           accountId: line.accountId,
           fundId: voucher.fundId,
           projectId: voucher.projectId,
+          // Only the income or expense line carries these; see PostingLine.
+          activityId: line.carriesDimensions ? voucher.activityId : null,
+          partyId: line.carriesDimensions ? voucher.partyId : null,
           debit: line.debit,
           credit: line.credit,
           bankAccountId: line.bankAccountId,
@@ -448,6 +455,23 @@ export class VouchersService {
 
     if (dto.projectId) await this.projects.assertPostable(dto.projectId, dto.fundId);
 
+    if (dto.activityId) {
+      const activity = await this.prisma.activity.findUnique({ where: { id: dto.activityId } });
+
+      if (!activity) throw new NotFoundException(`Activity ${dto.activityId} was not found`);
+
+      if (!activity.isActive) {
+        throw new BadRequestException(`${activity.nameTa} is no longer an active activity`);
+      }
+    }
+
+    if (dto.partyId) {
+      const party = await this.prisma.party.findUnique({ where: { id: dto.partyId } });
+
+      if (!party) throw new NotFoundException(`Party ${dto.partyId} was not found`);
+      if (!party.isActive) throw new BadRequestException(`${party.nameTa} is no longer active`);
+    }
+
     if (movesThroughBank(dto.mode)) {
       if (!dto.bankAccountId) {
         throw new BadRequestException(
@@ -524,6 +548,8 @@ export class VouchersService {
       accountId: voucher.accountId,
       fundId: voucher.fundId,
       projectId: voucher.projectId,
+      activityId: voucher.activityId,
+      partyId: voucher.partyId,
       mode: voucher.mode,
       bankAccountId: voucher.bankAccountId,
       chequeNo: voucher.chequeNo,
