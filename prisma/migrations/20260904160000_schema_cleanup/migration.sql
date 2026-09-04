@@ -6,20 +6,40 @@
 -- A split receipt of Rs 5,000 with Rs 2,000 earmarked for annadhanam is for
 -- that pooja on one line and not on the other. Held on the header, "how much
 -- did this pooja bring in" would answer 5,000 when the truth is 3,000.
-ALTER TABLE "voucher_lines" ADD COLUMN "event_id" INTEGER;
+-- Written to be safely re-runnable: an earlier attempt at this migration could
+-- have added the column and stopped at the backfill below.
+ALTER TABLE "voucher_lines" ADD COLUMN IF NOT EXISTS "event_id" INTEGER;
 
+ALTER TABLE "voucher_lines" DROP CONSTRAINT IF EXISTS "voucher_lines_event_id_fkey";
 ALTER TABLE "voucher_lines"
   ADD CONSTRAINT "voucher_lines_event_id_fkey"
   FOREIGN KEY ("event_id") REFERENCES "events"("id")
   ON DELETE RESTRICT ON UPDATE CASCADE;
 
-CREATE INDEX "voucher_lines_event" ON "voucher_lines"("event_id");
+CREATE INDEX IF NOT EXISTS "voucher_lines_event" ON "voucher_lines"("event_id");
 
 -- Existing vouchers were single-line, so their occurrence belongs to line 1.
+--
+-- The guard from the previous migration refuses any change to a posted
+-- voucher's lines, and it is right to: nobody should be able to recode a
+-- posted entry. This backfill is not a recoding — it is the same fact moving
+-- from the header to the line — so the guard is dropped for it and recreated
+-- immediately after.
+--
+-- Dropped and recreated rather than set aside with session_replication_role,
+-- which needs a privilege a managed database may withhold and which silently
+-- does nothing outside a transaction. This needs only ownership of the table,
+-- which whoever created the trigger already has.
+DROP TRIGGER IF EXISTS voucher_lines_guard_posted ON voucher_lines;
+
 UPDATE "voucher_lines" l
 SET "event_id" = v."event_id"
 FROM "vouchers" v
 WHERE v."id" = l."voucher_id" AND v."event_id" IS NOT NULL AND l."line_no" = 1;
+
+CREATE TRIGGER voucher_lines_guard_posted
+  BEFORE INSERT OR UPDATE OR DELETE ON voucher_lines
+  FOR EACH ROW EXECUTE FUNCTION guard_posted_voucher_line();
 
 -- --------------------------------------------------------- columns nothing reads
 
@@ -31,25 +51,26 @@ ALTER TABLE "vouchers" DROP CONSTRAINT IF EXISTS "vouchers_event_type_id_fkey";
 ALTER TABLE "vouchers" DROP CONSTRAINT IF EXISTS "vouchers_event_id_fkey";
 
 ALTER TABLE "vouchers"
-  DROP COLUMN "event_type_id",
-  DROP COLUMN "event_ref",
-  DROP COLUMN "event_id";
+  DROP COLUMN IF EXISTS "event_type_id",
+  DROP COLUMN IF EXISTS "event_ref",
+  DROP COLUMN IF EXISTS "event_id";
 
 -- activities.parent_id: a rollup no report ever performed. Speculative
 --   structure earns its place when something reads it, not before.
 ALTER TABLE "activities" DROP CONSTRAINT IF EXISTS "activities_parent_id_fkey";
 DROP INDEX IF EXISTS "activities_parent";
-ALTER TABLE "activities" DROP COLUMN "parent_id";
+ALTER TABLE "activities" DROP COLUMN IF EXISTS "parent_id";
 
 -- Free text the API accepted and no screen could ever show back.
-ALTER TABLE "voucher_lines" DROP COLUMN "note";
-ALTER TABLE "parties" DROP COLUMN "notes";
+ALTER TABLE "voucher_lines" DROP COLUMN IF EXISTS "note";
+ALTER TABLE "parties" DROP COLUMN IF EXISTS "notes";
 
 -- ------------------------------------------------- rules the database now holds
 
 -- A ledger entry carries money in exactly one direction. Enforced here rather
 -- than trusted from the posting code, because a row that broke it would put
 -- the trial balance out with nothing to point at.
+ALTER TABLE "ledger_entries" DROP CONSTRAINT IF EXISTS "ledger_entries_one_side_only";
 ALTER TABLE "ledger_entries"
   ADD CONSTRAINT "ledger_entries_one_side_only" CHECK (
     ("debit" IS NOT NULL AND "credit" IS NULL AND "debit" > 0) OR
@@ -88,6 +109,7 @@ $$ LANGUAGE plpgsql;
 
 -- Deferred to the end of the transaction: the lines are written one at a time
 -- and the total only has to agree once they all are.
+DROP TRIGGER IF EXISTS voucher_lines_total_agrees ON voucher_lines;
 CREATE CONSTRAINT TRIGGER voucher_lines_total_agrees
   AFTER INSERT OR UPDATE OR DELETE ON voucher_lines
   DEFERRABLE INITIALLY DEFERRED
@@ -99,14 +121,20 @@ CREATE CONSTRAINT TRIGGER voucher_lines_total_agrees
 -- from the parent scans the child end to end.
 -- The trigram index on the typed name already held this name; it is renamed
 -- to say which of the two party columns it covers.
-ALTER INDEX "vouchers_party" RENAME TO "vouchers_party_text";
-CREATE INDEX "vouchers_party" ON "vouchers"("party_id");
-CREATE INDEX "vouchers_bank_account" ON "vouchers"("bank_account_id");
-CREATE INDEX "vouchers_created_by" ON "vouchers"("created_by");
-CREATE INDEX "ledger_entries_project" ON "ledger_entries"("project_id");
-CREATE INDEX "ledger_entries_bank_account" ON "ledger_entries"("bank_account_id");
-CREATE INDEX "voucher_lines_project" ON "voucher_lines"("project_id");
-CREATE INDEX "activities_default_fund" ON "activities"("default_fund_id");
-CREATE INDEX "accounts_default_party" ON "accounts"("default_party_id");
-CREATE INDEX "fixed_deposits_fund" ON "fixed_deposits"("fund_id");
-CREATE INDEX "assets_fund" ON "assets"("fund_id");
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'vouchers_party')
+     AND NOT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'vouchers_party_text') THEN
+    ALTER INDEX "vouchers_party" RENAME TO "vouchers_party_text";
+  END IF;
+END $$;
+CREATE INDEX IF NOT EXISTS "vouchers_party" ON "vouchers"("party_id");
+CREATE INDEX IF NOT EXISTS "vouchers_bank_account" ON "vouchers"("bank_account_id");
+CREATE INDEX IF NOT EXISTS "vouchers_created_by" ON "vouchers"("created_by");
+CREATE INDEX IF NOT EXISTS "ledger_entries_project" ON "ledger_entries"("project_id");
+CREATE INDEX IF NOT EXISTS "ledger_entries_bank_account" ON "ledger_entries"("bank_account_id");
+CREATE INDEX IF NOT EXISTS "voucher_lines_project" ON "voucher_lines"("project_id");
+CREATE INDEX IF NOT EXISTS "activities_default_fund" ON "activities"("default_fund_id");
+CREATE INDEX IF NOT EXISTS "accounts_default_party" ON "accounts"("default_party_id");
+CREATE INDEX IF NOT EXISTS "fixed_deposits_fund" ON "fixed_deposits"("fund_id");
+CREATE INDEX IF NOT EXISTS "assets_fund" ON "assets"("fund_id");
