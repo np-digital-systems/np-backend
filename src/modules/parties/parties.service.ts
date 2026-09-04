@@ -67,7 +67,6 @@ export class PartiesService {
         kind: dto.kind,
         userId: dto.userId ?? null,
         phone: dto.phone ?? null,
-        notes: dto.notes ?? null,
       },
     });
 
@@ -97,7 +96,6 @@ export class PartiesService {
         kind: dto.kind,
         userId: dto.userId,
         phone: dto.phone,
-        notes: dto.notes,
         isActive: dto.isActive,
       },
     });
