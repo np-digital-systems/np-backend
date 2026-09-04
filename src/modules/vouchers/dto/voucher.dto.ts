@@ -39,6 +39,10 @@ export class VoucherDto {
   @ApiProperty() accountId!: number;
   @ApiProperty() fundId!: number;
   @ApiProperty({ nullable: true }) projectId!: number | null;
+  @ApiProperty({ nullable: true, description: 'What the entry was for' })
+  activityId!: number | null;
+  @ApiProperty({ nullable: true, description: 'Who the entry was with' })
+  partyId!: number | null;
   @ApiProperty({ enum: PaymentMode }) mode!: PaymentMode;
   @ApiProperty({ nullable: true }) bankAccountId!: number | null;
   @ApiProperty({ nullable: true }) chequeNo!: string | null;
@@ -101,6 +105,22 @@ export class CreateVoucherDto {
   @IsInt()
   @Min(1)
   projectId?: number;
+
+  @ApiPropertyOptional({ description: 'What the entry was for — a pooja, a service, upkeep' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  activityId?: number;
+
+  @ApiPropertyOptional({
+    description: 'Who the entry was with. The typed `party` name is kept alongside it',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  partyId?: number;
 
   @ApiProperty({ enum: PaymentMode, description: 'Decides the contra side of the entry' })
   @IsEnum(PaymentMode)
