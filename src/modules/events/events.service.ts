@@ -444,8 +444,7 @@ export class EventsService {
       nameEn: type.nameEn ?? '',
       frequencyType: type.frequencyType,
       noOfInstances: type.noOfInstances,
-      defaultFundId: type.defaultFundId,
-      defaultProjectId: type.defaultProjectId,
+      activityId: type.activityId,
       createdAt: type.createdAt,
       updatedAt: type.updatedAt,
     };
