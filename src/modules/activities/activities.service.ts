@@ -64,7 +64,6 @@ export class ActivitiesService {
 
   async create(dto: CreateActivityDto, context: ActorContext): Promise<ActivityRecordDto> {
     await this.assertFundIsUsable(dto.defaultFundId ?? null);
-    if (dto.parentId) await this.assertParentExists(dto.parentId);
 
     const activity = await this.prisma.activity.create({
       data: {
@@ -72,7 +71,6 @@ export class ActivitiesService {
         nameEn: dto.nameEn,
         kind: dto.kind,
         defaultFundId: dto.defaultFundId ?? null,
-        parentId: dto.parentId ?? null,
       },
     });
 
@@ -99,14 +97,6 @@ export class ActivitiesService {
       await this.assertFundIsUsable(dto.defaultFundId ?? null);
     }
 
-    if (dto.parentId) {
-      if (dto.parentId === id) {
-        throw new ConflictException('An activity cannot roll up under itself');
-      }
-
-      await this.assertParentExists(dto.parentId);
-    }
-
     if (dto.isActive === false) await this.assertNothingDependsOnIt(id, before.nameTa);
 
     const activity = await this.prisma.activity.update({
@@ -116,7 +106,6 @@ export class ActivitiesService {
         nameEn: dto.nameEn,
         kind: dto.kind,
         defaultFundId: dto.defaultFundId,
-        parentId: dto.parentId,
         isActive: dto.isActive,
       },
     });
@@ -161,12 +150,6 @@ export class ActivitiesService {
     if (!fund.isActive) throw new ConflictException(`Fund ${fund.nameTa} is closed`);
   }
 
-  private async assertParentExists(parentId: number): Promise<void> {
-    const parent = await this.prisma.activity.findUnique({ where: { id: parentId } });
-
-    if (!parent) throw new NotFoundException(`Activity ${parentId} was not found`);
-  }
-
   private toRecord(
     activity: ActivityRow,
     totals: Map<AccountType, Sides> | undefined,
@@ -188,7 +171,6 @@ export class ActivitiesService {
       nameEn: activity.nameEn ?? '',
       kind: activity.kind,
       defaultFundId: activity.defaultFundId,
-      parentId: activity.parentId,
       isActive: activity.isActive,
       entryCount,
       income: round(earned),
