@@ -26,13 +26,15 @@ import {
   RejectVoucherDto,
   UpdateVoucherDto,
   VoucherRecordDto,
+  WriteVoucherLineDto,
 } from './dto/voucher.dto';
-import { buildPostingLines, movesThroughBank } from './voucher-posting';
+import { buildPostingLines, movesThroughBank, sumLines } from './voucher-posting';
 
 const VOUCHER_INCLUDE = {
-  account: true,
-  fund: true,
-  project: true,
+  lines: {
+    include: { account: true, fund: true, project: true },
+    orderBy: { lineNo: 'asc' },
+  },
   bankAccount: true,
   createdByUser: { select: { id: true, nameTa: true, fullName: true } },
   decidedByUser: { select: { id: true, nameTa: true, fullName: true } },
@@ -76,9 +78,18 @@ export class VouchersService {
       kind: query.kind,
       status: VoucherStatusWire.toPrismaOptional(query.status),
       financialYearId: query.financialYearId,
-      fundId: query.fundId,
-      accountId: query.accountId,
-      projectId: query.projectId,
+      // The coding lives on the lines, so a filter asks whether any line
+      // matches rather than reading a column the header no longer has.
+      lines:
+        query.fundId || query.accountId || query.projectId
+          ? {
+              some: {
+                fundId: query.fundId,
+                accountId: query.accountId,
+                projectId: query.projectId,
+              },
+            }
+          : undefined,
       createdBy: canSeeAll && !query.mineOnly ? undefined : context.actor.id,
       date: this.dateRange(query.from, query.to),
       OR: query.search
@@ -134,14 +145,10 @@ export class VouchersService {
         financialYearId: year.id,
         date,
         description: dto.description,
-        amount: dto.amount,
-        accountId: dto.accountId,
-        fundId: dto.fundId,
-        projectId: dto.projectId,
+        amount: sumLines(dto.lines),
         mode: dto.mode,
         bankAccountId: dto.bankAccountId,
         chequeNo: dto.chequeNo,
-        activityId: dto.activityId,
         partyId: dto.partyId,
         party: dto.party,
         manualVoucherNo: dto.manualVoucherNo,
@@ -151,6 +158,7 @@ export class VouchersService {
         notes: dto.notes,
         status: VoucherStatus.Draft,
         createdBy: context.actor.id,
+        lines: { create: this.lineRows(dto.lines) },
       },
       include: VOUCHER_INCLUDE,
     });
@@ -159,7 +167,7 @@ export class VouchersService {
       action: 'create',
       entity: 'voucher',
       entityRef: voucher.ref,
-      summary: `Raised ${dto.kind} ${voucher.ref} for ${dto.amount} from ${dto.party}`,
+      summary: `Raised ${dto.kind} ${voucher.ref} for ${toRupees(voucher.amount)} from ${dto.party}`,
     });
 
     return this.toRecord(voucher);
@@ -181,33 +189,39 @@ export class VouchersService {
 
     await this.validateCoding(dto);
 
-    const voucher = await this.prisma.voucher.update({
-      where: { id },
-      data: {
-        kind: dto.kind,
-        financialYearId: year.id,
-        date,
-        description: dto.description,
-        amount: dto.amount,
-        accountId: dto.accountId,
-        fundId: dto.fundId,
-        projectId: dto.projectId ?? null,
-        mode: dto.mode,
-        bankAccountId: dto.bankAccountId ?? null,
-        chequeNo: dto.chequeNo ?? null,
-        activityId: dto.activityId ?? null,
-        partyId: dto.partyId ?? null,
-        party: dto.party,
-        manualVoucherNo: dto.manualVoucherNo ?? null,
-        eventRef: dto.eventRef ?? null,
-        notes: dto.notes ?? null,
-        status: VoucherStatus.Draft,
-        rejectionReason: null,
-        decidedBy: null,
-        decidedAt: null,
-        submittedAt: null,
-      },
-      include: VOUCHER_INCLUDE,
+    /*
+     * The lines are replaced rather than reconciled. A draft's coding is not a
+     * thing with a history — it is whatever the clerk last meant — and matching
+     * old rows to new would invent an identity the user never asked for.
+     */
+    const voucher = await this.prisma.$transaction(async (tx) => {
+      await tx.voucherLine.deleteMany({ where: { voucherId: BigInt(id) } });
+
+      return tx.voucher.update({
+        where: { id },
+        data: {
+          kind: dto.kind,
+          financialYearId: year.id,
+          date,
+          description: dto.description,
+          amount: sumLines(dto.lines),
+          mode: dto.mode,
+          bankAccountId: dto.bankAccountId ?? null,
+          chequeNo: dto.chequeNo ?? null,
+          partyId: dto.partyId ?? null,
+          party: dto.party,
+          manualVoucherNo: dto.manualVoucherNo ?? null,
+          eventRef: dto.eventRef ?? null,
+          notes: dto.notes ?? null,
+          status: VoucherStatus.Draft,
+          rejectionReason: null,
+          decidedBy: null,
+          decidedAt: null,
+          submittedAt: null,
+          lines: { create: this.lineRows(dto.lines) },
+        },
+        include: VOUCHER_INCLUDE,
+      });
     });
 
     await this.audit.record(context, {
@@ -344,8 +358,13 @@ export class VouchersService {
 
     const lines = buildPostingLines({
       kind: voucher.kind,
-      amount: toRupees(voucher.amount),
-      accountId: voucher.accountId,
+      lines: voucher.lines.map((line) => ({
+        accountId: line.accountId,
+        amount: toRupees(line.amount),
+        fundId: line.fundId,
+        projectId: line.projectId,
+        activityId: line.activityId,
+      })),
       contraAccountId,
       bankAccountId: voucher.bankAccountId,
     });
@@ -357,11 +376,12 @@ export class VouchersService {
           lineNo: line.lineNo,
           date: voucher.date,
           accountId: line.accountId,
-          fundId: voucher.fundId,
-          projectId: voucher.projectId,
-          // Only the income or expense line carries these; see PostingLine.
-          activityId: line.carriesDimensions ? voucher.activityId : null,
-          partyId: line.carriesDimensions ? voucher.partyId : null,
+          fundId: line.fundId,
+          projectId: line.projectId,
+          activityId: line.activityId,
+          // The party belongs to the document, so it rides every coding line
+          // and none of the contra. Both sides would net it to nil.
+          partyId: line.isCoding ? voucher.partyId : null,
           debit: line.debit,
           credit: line.credit,
           bankAccountId: line.bankAccountId,
@@ -438,30 +458,58 @@ export class VouchersService {
     return `${row.prefix}-${year}-${String(row.allocated).padStart(4, '0')}`;
   }
 
+  /** The rows a voucher's lines become, numbered in the order they were given. */
+  private lineRows(lines: readonly WriteVoucherLineDto[]) {
+    return lines.map((line, index) => ({
+      lineNo: index + 1,
+      accountId: line.accountId,
+      amount: line.amount,
+      fundId: line.fundId,
+      projectId: line.projectId ?? null,
+      activityId: line.activityId ?? null,
+      note: line.note ?? null,
+    }));
+  }
+
   private async validateCoding(dto: CreateVoucherDto): Promise<void> {
-    const account = await this.accounts.assertPostable(dto.accountId);
     const expected = dto.kind === VoucherKind.receipt ? AccountType.income : AccountType.expense;
 
-    if (account.type !== expected) {
-      throw new BadRequestException(
-        `A ${dto.kind} must name an ${expected} head; ${account.code} is ${account.type}`,
-      );
-    }
+    /*
+     * Every line is checked, not just the first. A split receipt is one
+     * document, so one bad head on line three has to stop the whole thing —
+     * a half-posted voucher is not something the books can describe.
+     */
+    for (const [index, line] of dto.lines.entries()) {
+      const where = dto.lines.length > 1 ? ` on line ${index + 1}` : '';
+      const account = await this.accounts.assertPostable(line.accountId);
 
-    const fund = await this.prisma.fund.findUnique({ where: { id: dto.fundId } });
+      if (account.type !== expected) {
+        throw new BadRequestException(
+          `A ${dto.kind} must name an ${expected} head${where}; ${account.code} is ${account.type}`,
+        );
+      }
 
-    if (!fund) throw new NotFoundException(`Fund ${dto.fundId} was not found`);
-    if (!fund.isActive) throw new BadRequestException(`Fund ${fund.nameTa} is closed`);
+      const fund = await this.prisma.fund.findUnique({ where: { id: line.fundId } });
 
-    if (dto.projectId) await this.projects.assertPostable(dto.projectId, dto.fundId);
+      if (!fund) throw new NotFoundException(`Fund ${line.fundId} was not found${where}`);
+      if (!fund.isActive) throw new BadRequestException(`Fund ${fund.nameTa} is closed${where}`);
 
-    if (dto.activityId) {
-      const activity = await this.prisma.activity.findUnique({ where: { id: dto.activityId } });
+      if (line.projectId) await this.projects.assertPostable(line.projectId, line.fundId);
 
-      if (!activity) throw new NotFoundException(`Activity ${dto.activityId} was not found`);
+      if (line.activityId) {
+        const activity = await this.prisma.activity.findUnique({
+          where: { id: line.activityId },
+        });
 
-      if (!activity.isActive) {
-        throw new BadRequestException(`${activity.nameTa} is no longer an active activity`);
+        if (!activity) {
+          throw new NotFoundException(`Activity ${line.activityId} was not found${where}`);
+        }
+
+        if (!activity.isActive) {
+          throw new BadRequestException(
+            `${activity.nameTa} is no longer an active activity${where}`,
+          );
+        }
       }
     }
 
@@ -545,10 +593,19 @@ export class VouchersService {
       date: voucher.date.toISOString().slice(0, 10),
       description: voucher.description,
       amount: toRupees(voucher.amount),
-      accountId: voucher.accountId,
-      fundId: voucher.fundId,
-      projectId: voucher.projectId,
-      activityId: voucher.activityId,
+      lines: voucher.lines.map((line) => ({
+        id: Number(line.id),
+        lineNo: line.lineNo,
+        accountId: line.accountId,
+        amount: toRupees(line.amount),
+        fundId: line.fundId,
+        projectId: line.projectId,
+        activityId: line.activityId,
+        note: line.note,
+        account: toAccountRef(line.account),
+        fund: toFundRef(line.fund),
+        project: line.project ? toProjectRef(line.project) : null,
+      })),
       partyId: voucher.partyId,
       mode: voucher.mode,
       bankAccountId: voucher.bankAccountId,
@@ -564,9 +621,6 @@ export class VouchersService {
       decidedAt: voucher.decidedAt,
       rejectionReason: voucher.rejectionReason,
       postedAt: voucher.postedAt,
-      account: toAccountRef(voucher.account),
-      fund: toFundRef(voucher.fund),
-      project: voucher.project ? toProjectRef(voucher.project) : null,
       bankAccount: voucher.bankAccount ? toBankAccountRef(voucher.bankAccount) : null,
     };
   }
