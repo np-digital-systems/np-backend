@@ -131,7 +131,7 @@ export class EventsService {
 
     const [sponsors, events] = await Promise.all([
       this.prisma.eventTypeSponsor.findMany({
-        where: { eventTypeId: { in: ids } },
+        where: { slot: { eventTypeId: { in: ids } } },
         include: { party: { select: SPONSOR_SELECT } },
       }),
       this.prisma.event.findMany({
@@ -160,13 +160,8 @@ export class EventsService {
     }
 
     return types.map((type) => {
-      // A sponsor registered against the type as a whole stands for every slot;
-      // ones pinned to a slot are listed first.
-      const typeWide = sponsors.filter((row) => row.eventTypeId === type.id && row.slotId === null);
-
       const slots = type.slots.map((slot) => {
-        const pinned = sponsors.filter((row) => row.slotId === slot.id);
-        const candidates = [...pinned, ...typeWide];
+        const candidates = sponsors.filter((row) => row.slotId === slot.id);
         const occurrences = dated.get(slot.id) ?? [];
         const event = occurrences[0];
 

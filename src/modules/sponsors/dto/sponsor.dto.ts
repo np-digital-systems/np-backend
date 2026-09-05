@@ -63,17 +63,11 @@ export class CreateSponsorDto {
   @Min(1)
   eventTypeId!: number;
 
-  @ApiPropertyOptional({
-    minimum: 1,
-    maximum: 366,
-    description: 'Omit to register the sponsor against every instance of the type',
-  })
-  @IsOptional()
+  @ApiProperty({ description: 'Which slot of the type this sponsorship is for' })
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  @Max(366)
-  instanceIdentifier?: number;
+  instanceIdentifier!: number;
 
   @ApiProperty({ description: 'The party sponsoring the slot' })
   @Type(() => Number)

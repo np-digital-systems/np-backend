@@ -707,8 +707,7 @@ model EventType {
 
   activity Activity? @relation(fields: [activityId], references: [id])
 
-  slots    EventSlot[]
-  sponsors EventTypeSponsor[]
+  slots EventSlot[]
 
   @@index([activityId], map: "event_types_activity")
   @@map("event_types")
@@ -751,23 +750,21 @@ model EventSlot {
  * recorded on the occurrence. Storing a turn order here would be a second
  * opinion that drifts the first time a year is skipped or swapped.
  *
- * `slotId` is null for a party who takes any slot of the type.
+ * Always a slot. Every type has them, so "all instances" was a way of saying
+ * "all of these" that nothing could act on — the schedule had to fan it back
+ * out to the slots anyway, and it left a nullable link that only ever meant
+ * the same thing as a row per slot.
  */
 model EventTypeSponsor {
-  id          Int      @id @default(autoincrement())
-  eventTypeId Int      @map("event_type_id")
-  slotId      Int?     @map("slot_id")
-  partyId     Int      @map("party_id")
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id        Int      @id @default(autoincrement())
+  slotId    Int      @map("slot_id")
+  partyId   Int      @map("party_id")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  eventType EventType  @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
-  slot      EventSlot? @relation(fields: [slotId], references: [id], onDelete: Cascade)
-  party     Party      @relation(fields: [partyId], references: [id])
+  slot  EventSlot @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  party Party     @relation(fields: [partyId], references: [id])
 
-  // Postgres treats NULLs as distinct, so type-wide rows (null slot) are
-  // deduplicated in the service instead — see SponsorsService.assertNotDuplicate.
-  @@unique([eventTypeId, slotId, partyId], map: "one_sponsor_per_slot")
-  @@index([slotId], map: "sponsors_by_slot")
+  @@unique([slotId, partyId], map: "one_sponsor_per_slot")
   @@index([partyId], map: "sponsors_by_party")
   @@map("event_type_sponsors")
 }

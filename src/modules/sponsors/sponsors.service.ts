@@ -38,8 +38,7 @@ const SPONSOR_SELECT = {
 type SponsorRow = Prisma.PartyGetPayload<{ select: typeof SPONSOR_SELECT }>;
 
 const ASSIGNMENT_INCLUDE = {
-  eventType: true,
-  slot: true,
+  slot: { include: { eventType: true } },
   party: { select: SPONSOR_SELECT },
 } satisfies Prisma.EventTypeSponsorInclude;
 
@@ -48,10 +47,9 @@ type AssignmentRow = Prisma.EventTypeSponsorGetPayload<{ include: typeof ASSIGNM
 /** Occurrence counts, keyed by slot for instance rows and by type for the rest. */
 interface OccurrenceCounts {
   bySlot: Map<string, number>;
-  byType: Map<number, number>;
 }
 
-const NO_OCCURRENCES: OccurrenceCounts = { bySlot: new Map(), byType: new Map() };
+const NO_OCCURRENCES: OccurrenceCounts = { bySlot: new Map() };
 
 @Injectable()
 export class SponsorsService {
@@ -111,15 +109,13 @@ export class SponsorsService {
 
     const assignments = await this.prisma.eventTypeSponsor.findMany({
       where: {
-        eventTypeId: query.eventTypeId,
-        ...(query.instanceIdentifier === undefined
-          ? {}
-          : {
-              OR: [{ slot: { instanceIdentifier: query.instanceIdentifier } }, { slotId: null }],
-            }),
+        slot: {
+          eventTypeId: query.eventTypeId,
+          instanceIdentifier: query.instanceIdentifier,
+        },
       },
       include: ASSIGNMENT_INCLUDE,
-      orderBy: [{ eventTypeId: 'asc' }, { slotId: { sort: 'asc', nulls: 'first' } }],
+      orderBy: { slotId: 'asc' },
     });
 
     const occurrences = await this.countOccurrences(assignments, year);
@@ -146,7 +142,7 @@ export class SponsorsService {
     const slotId = await this.resolveSlotId(dto.eventTypeId, dto.instanceIdentifier);
 
     await this.assertPartyIsUsable(dto.partyId);
-    await this.assertNotDuplicate(dto.eventTypeId, slotId, dto.partyId);
+    await this.assertNotDuplicate(slotId, dto.partyId);
 
     const created = await this.prisma.$transaction(async (tx) => {
       // Sponsoring something is what makes a party a sponsor. Granting the role
@@ -158,7 +154,7 @@ export class SponsorsService {
       });
 
       return tx.eventTypeSponsor.create({
-        data: { eventTypeId: dto.eventTypeId, slotId, partyId: dto.partyId },
+        data: { slotId, partyId: dto.partyId },
         include: ASSIGNMENT_INCLUDE,
       });
     });
@@ -167,7 +163,7 @@ export class SponsorsService {
       action: 'create',
       entity: 'event_type_sponsor',
       entityRef: String(created.id),
-      summary: `Registered ${this.nameOf(created.party)} as a sponsor of ${created.eventType.nameTa} (${this.labelOf(created)})`,
+      summary: `Registered ${this.nameOf(created.party)} as a sponsor of ${created.slot.eventType.nameTa} (${this.labelOf(created)})`,
     });
 
     return this.toAssignment(created, NO_OCCURRENCES, true);
@@ -186,16 +182,13 @@ export class SponsorsService {
     if (!before) throw new NotFoundException(`Sponsor ${id} was not found`);
     if (dto.partyId) await this.assertPartyIsUsable(dto.partyId);
 
-    const eventTypeId = dto.eventTypeId ?? before.eventTypeId;
-    const instanceIdentifier =
-      dto.instanceIdentifier === undefined
-        ? (before.slot?.instanceIdentifier ?? undefined)
-        : (dto.instanceIdentifier ?? undefined);
+    const eventTypeId = dto.eventTypeId ?? before.slot.eventTypeId;
+    const instanceIdentifier = dto.instanceIdentifier ?? before.slot.instanceIdentifier;
     const partyId = dto.partyId ?? before.partyId;
 
     const slotId = await this.resolveSlotId(eventTypeId, instanceIdentifier);
 
-    await this.assertNotDuplicate(eventTypeId, slotId, partyId, id);
+    await this.assertNotDuplicate(slotId, partyId, id);
 
     const updated = await this.prisma.$transaction(async (tx) => {
       await tx.partyRole.createMany({
@@ -205,7 +198,7 @@ export class SponsorsService {
 
       return tx.eventTypeSponsor.update({
         where: { id },
-        data: { eventTypeId, slotId, partyId },
+        data: { slotId, partyId },
         include: ASSIGNMENT_INCLUDE,
       });
     });
@@ -214,18 +207,10 @@ export class SponsorsService {
       action: 'update',
       entity: 'event_type_sponsor',
       entityRef: String(id),
-      summary: `Updated the ${updated.eventType.nameTa} sponsor ${this.nameOf(updated.party)} (${this.labelOf(updated)})`,
+      summary: `Updated the ${updated.slot.eventType.nameTa} sponsor ${this.nameOf(updated.party)} (${this.labelOf(updated)})`,
       diff: AuditService.diff(
-        {
-          eventTypeId: before.eventTypeId,
-          slotId: before.slotId,
-          partyId: before.partyId,
-        },
-        {
-          eventTypeId: updated.eventTypeId,
-          slotId: updated.slotId,
-          partyId: updated.partyId,
-        },
+        { slotId: before.slotId, partyId: before.partyId },
+        { slotId: updated.slotId, partyId: updated.partyId },
       ),
     });
 
@@ -246,26 +231,20 @@ export class SponsorsService {
       action: 'delete',
       entity: 'event_type_sponsor',
       entityRef: String(id),
-      summary: `Removed ${this.nameOf(assignment.party)} as a sponsor of ${assignment.eventType.nameTa} (${this.labelOf(assignment)})`,
+      summary: `Removed ${this.nameOf(assignment.party)} as a sponsor of ${assignment.slot.eventType.nameTa} (${this.labelOf(assignment)})`,
     });
   }
 
   /**
-   * The slot a sponsorship attaches to, or null for one that covers the type.
+   * The slot a sponsorship attaches to.
    *
    * A slot is a row now, so an instance the type never declared is refused by
    * lookup rather than by an arithmetic check that could drift from it.
    */
-  private async resolveSlotId(
-    eventTypeId: number,
-    instanceIdentifier?: number,
-  ): Promise<number | null> {
+  private async resolveSlotId(eventTypeId: number, instanceIdentifier: number): Promise<number> {
     const eventType = await this.prisma.eventType.findUnique({ where: { id: eventTypeId } });
 
     if (!eventType) throw new NotFoundException(`Event type ${eventTypeId} was not found`);
-
-    // No instance means the party takes every slot of the type.
-    if (instanceIdentifier === undefined) return null;
 
     const slot = await this.prisma.eventSlot.findUnique({
       where: { eventTypeId_instanceIdentifier: { eventTypeId, instanceIdentifier } },
@@ -287,14 +266,12 @@ export class SponsorsService {
    * check lives here for both cases, and reads the same either way.
    */
   private async assertNotDuplicate(
-    eventTypeId: number,
-    slotId: number | null,
+    slotId: number,
     partyId: number,
     exceptId?: number,
   ): Promise<void> {
     const existing = await this.prisma.eventTypeSponsor.findFirst({
       where: {
-        eventTypeId,
         slotId,
         partyId,
         id: exceptId ? { not: exceptId } : undefined,
@@ -304,7 +281,7 @@ export class SponsorsService {
 
     if (existing) {
       throw new ConflictException(
-        `${this.nameOf(existing.party)} is already a sponsor of ${existing.eventType.nameTa} (${this.labelOf(existing)})`,
+        `${this.nameOf(existing.party)} is already a sponsor of ${existing.slot.eventType.nameTa} (${this.labelOf(existing)})`,
       );
     }
   }
@@ -324,33 +301,31 @@ export class SponsorsService {
    * for an instance row, every slot of the type for a type-wide one.
    */
   private async countOccurrences(
-    assignments: { eventTypeId: number; slotId: number | null }[],
+    assignments: { slotId: number }[],
     year: number,
   ): Promise<OccurrenceCounts> {
     if (assignments.length === 0) return NO_OCCURRENCES;
 
     const rows = await this.prisma.event.findMany({
       where: {
-        slot: { eventTypeId: { in: [...new Set(assignments.map((a) => a.eventTypeId))] } },
+        slotId: { in: [...new Set(assignments.map((a) => a.slotId))] },
         scheduledDate: {
           gte: new Date(Date.UTC(year, 0, 1)),
           lt: new Date(Date.UTC(year + 1, 0, 1)),
         },
       },
-      select: { slotId: true, slot: { select: { eventTypeId: true } } },
+      select: { slotId: true },
     });
 
     const bySlot = new Map<string, number>();
-    const byType = new Map<number, number>();
 
     for (const row of rows) {
       const key = String(row.slotId);
 
       bySlot.set(key, (bySlot.get(key) ?? 0) + 1);
-      byType.set(row.slot.eventTypeId, (byType.get(row.slot.eventTypeId) ?? 0) + 1);
     }
 
-    return { bySlot, byType };
+    return { bySlot };
   }
 
   private toAssignment(
@@ -360,36 +335,33 @@ export class SponsorsService {
   ): SponsorAssignmentDto {
     return {
       id: assignment.id,
-      eventTypeId: assignment.eventTypeId,
+      eventTypeId: assignment.slot.eventTypeId,
       slotId: assignment.slotId,
       // Both read through the slot, which is the one place they live now.
-      instanceIdentifier: assignment.slot?.instanceIdentifier ?? null,
-      customInstanceName: assignment.slot?.customInstanceName ?? null,
+      instanceIdentifier: assignment.slot.instanceIdentifier,
+      customInstanceName: assignment.slot.customInstanceName,
       partyId: assignment.partyId,
       createdAt: assignment.createdAt,
       eventType: {
-        id: assignment.eventType.id,
-        name: assignment.eventType.nameTa,
-        nameEn: assignment.eventType.nameEn ?? '',
-        frequencyType: assignment.eventType.frequencyType,
-        noOfInstances: assignment.eventType.noOfInstances,
-        createdAt: assignment.eventType.createdAt,
-        updatedAt: assignment.eventType.updatedAt,
+        id: assignment.slot.eventType.id,
+        name: assignment.slot.eventType.nameTa,
+        nameEn: assignment.slot.eventType.nameEn ?? '',
+        frequencyType: assignment.slot.eventType.frequencyType,
+        noOfInstances: assignment.slot.eventType.noOfInstances,
+        createdAt: assignment.slot.eventType.createdAt,
+        updatedAt: assignment.slot.eventType.updatedAt,
       },
       sponsor: this.toSponsor(assignment.party, canSeeContact),
       instanceLabel: this.labelOf(assignment),
-      occurrences:
-        assignment.slotId === null
-          ? (occurrences.byType.get(assignment.eventTypeId) ?? 0)
-          : (occurrences.bySlot.get(String(assignment.slotId)) ?? 0),
+      occurrences: occurrences.bySlot.get(String(assignment.slotId)) ?? 0,
     };
   }
 
   private labelOf(assignment: AssignmentRow): string {
     return describeInstance(
-      assignment.eventType.frequencyType,
-      assignment.slot?.instanceIdentifier,
-      assignment.slot?.customInstanceName,
+      assignment.slot.eventType.frequencyType,
+      assignment.slot.instanceIdentifier,
+      assignment.slot.customInstanceName,
     );
   }
 
