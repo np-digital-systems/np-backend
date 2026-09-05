@@ -10,7 +10,7 @@ import { Prisma } from '../../generated/prisma/client';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { describeInstance } from '../sponsors/instance-label';
-import { SponsorUserDto } from '../sponsors/dto/sponsor.dto';
+import { SponsorPartyDto } from '../sponsors/dto/sponsor.dto';
 import {
   CreateEventDto,
   EventRecordDto,
@@ -22,14 +22,18 @@ import {
 import { PublicEventDto } from './dto/public-event.dto';
 import { deriveEventStatus, isOverdue } from './event-status';
 
+/*
+ * Email and address live on the sign-in, not the party, so they are read
+ * through the link where there is one. Most sponsors have none.
+ */
 const SPONSOR_SELECT = {
   id: true,
   nameTa: true,
-  fullName: true,
-  email: true,
+  nameEn: true,
   phone: true,
-  address: true,
-} satisfies Prisma.UserSelect;
+  userId: true,
+  user: { select: { email: true, address: true } },
+} satisfies Prisma.PartySelect;
 
 const EVENT_INCLUDE = {
   eventType: true,
@@ -39,12 +43,12 @@ const EVENT_INCLUDE = {
 /** The public site sees a sponsor's name and nothing else — see PublicEventDto. */
 const PUBLIC_INCLUDE = {
   eventType: true,
-  sponsor: { select: { nameTa: true, fullName: true } },
+  sponsor: { select: { nameTa: true, nameEn: true } },
 } satisfies Prisma.EventInclude;
 
 type EventRow = Prisma.EventGetPayload<{ include: typeof EVENT_INCLUDE }>;
 type PublicEventRow = Prisma.EventGetPayload<{ include: typeof PUBLIC_INCLUDE }>;
-type SponsorRow = Prisma.UserGetPayload<{ select: typeof SPONSOR_SELECT }>;
+type SponsorRow = Prisma.PartyGetPayload<{ select: typeof SPONSOR_SELECT }>;
 
 /** `HH:mm` on an arbitrary date — Postgres `time` carries no day. */
 const timeToDate = (value: string): Date => new Date(`1970-01-01T${value}:00Z`);
@@ -66,7 +70,7 @@ export class EventsService {
       where: {
         eventTypeId: query.eventTypeId,
         isCompleted: query.isCompleted,
-        sponsorId: query.unsponsoredOnly ? null : undefined,
+        sponsorPartyId: query.unsponsoredOnly ? null : undefined,
         scheduledDate: this.dateRange(query),
       },
       include: EVENT_INCLUDE,
@@ -91,7 +95,7 @@ export class EventsService {
     const [events, completed, unsponsored] = await Promise.all([
       this.prisma.event.findMany({ where, select: { scheduledDate: true, isCompleted: true } }),
       this.prisma.event.count({ where: { ...where, isCompleted: true } }),
-      this.prisma.event.count({ where: { ...where, sponsorId: null } }),
+      this.prisma.event.count({ where: { ...where, sponsorPartyId: null } }),
     ]);
 
     return {
@@ -127,7 +131,7 @@ export class EventsService {
     const [sponsors, events] = await Promise.all([
       this.prisma.eventTypeSponsor.findMany({
         where: { eventTypeId: { in: ids } },
-        include: { user: { select: SPONSOR_SELECT } },
+        include: { party: { select: SPONSOR_SELECT } },
       }),
       this.prisma.event.findMany({
         where: { eventTypeId: { in: ids }, scheduledDate: this.yearRange(year) },
@@ -179,7 +183,7 @@ export class EventsService {
             pinned[0]?.customInstanceName ?? event?.customInstanceName,
           ),
           customInstanceName: pinned[0]?.customInstanceName ?? event?.customInstanceName ?? null,
-          defaultSponsor: assignment ? this.toSponsor(assignment.user, canSeeContact) : null,
+          defaultSponsor: assignment ? this.toSponsor(assignment.party, canSeeContact) : null,
           sponsorCount: candidates.length,
           eventCount: occurrences.length,
           event: event ? this.toRecord(event, canSeeContact) : null,
@@ -191,7 +195,7 @@ export class EventsService {
         slots,
         scheduledCount: slots.filter((slot) => slot.event !== null).length,
         sponsoredCount: slots.filter(
-          (slot) => slot.defaultSponsor !== null || slot.event?.sponsorId,
+          (slot) => slot.defaultSponsor !== null || slot.event?.sponsorPartyId,
         ).length,
       };
     });
@@ -267,10 +271,10 @@ export class EventsService {
     this.assertTimes(dto.startTime, dto.endTime);
 
     // An occurrence falls to its slot's registered sponsor unless one is named.
-    const sponsorId =
-      dto.sponsorId ?? (await this.standingSponsor(dto.eventTypeId, dto.instanceIdentifier));
+    const sponsorPartyId =
+      dto.sponsorPartyId ?? (await this.standingSponsor(dto.eventTypeId, dto.instanceIdentifier));
 
-    if (sponsorId) await this.assertSponsorIsActive(sponsorId);
+    if (sponsorPartyId) await this.assertSponsorIsUsable(sponsorPartyId);
 
     const event = await this.prisma.event.create({
       data: {
@@ -280,7 +284,7 @@ export class EventsService {
         scheduledDate: new Date(dto.scheduledDate),
         startTime: timeToDate(dto.startTime),
         endTime: dto.endTime ? timeToDate(dto.endTime) : undefined,
-        sponsorId,
+        sponsorPartyId,
         notes: dto.notes,
       },
       include: EVENT_INCLUDE,
@@ -305,7 +309,7 @@ export class EventsService {
     }
 
     this.assertTimes(dto.startTime ?? dateToTime(before.startTime), dto.endTime);
-    if (dto.sponsorId) await this.assertSponsorIsActive(dto.sponsorId);
+    if (dto.sponsorPartyId) await this.assertSponsorIsUsable(dto.sponsorPartyId);
 
     const event = await this.prisma.event.update({
       where: { id },
@@ -314,7 +318,7 @@ export class EventsService {
         scheduledDate: dto.scheduledDate ? new Date(dto.scheduledDate) : undefined,
         startTime: dto.startTime ? timeToDate(dto.startTime) : undefined,
         endTime: dto.endTime ? timeToDate(dto.endTime) : undefined,
-        sponsorId: dto.sponsorId,
+        sponsorPartyId: dto.sponsorPartyId,
         notes: dto.notes,
       },
       include: EVENT_INCLUDE,
@@ -326,8 +330,16 @@ export class EventsService {
       entityRef: String(id),
       summary: `Updated ${event.eventType.nameTa} on ${event.scheduledDate.toISOString().slice(0, 10)}`,
       diff: AuditService.diff(
-        { scheduledDate: before.scheduledDate, sponsorId: before.sponsorId, notes: before.notes },
-        { scheduledDate: event.scheduledDate, sponsorId: event.sponsorId, notes: event.notes },
+        {
+          scheduledDate: before.scheduledDate,
+          sponsorPartyId: before.sponsorPartyId,
+          notes: before.notes,
+        },
+        {
+          scheduledDate: event.scheduledDate,
+          sponsorPartyId: event.sponsorPartyId,
+          notes: event.notes,
+        },
       ),
     });
 
@@ -397,24 +409,24 @@ export class EventsService {
   private async standingSponsor(
     eventTypeId: number,
     instanceIdentifier: number,
-  ): Promise<string | undefined> {
+  ): Promise<number | undefined> {
     const pinned = await this.prisma.eventTypeSponsor.findMany({
       where: { eventTypeId, instanceIdentifier },
-      select: { userId: true },
+      select: { partyId: true },
       take: 2,
     });
 
-    return pinned.length === 1 ? pinned[0].userId : undefined;
+    return pinned.length === 1 ? pinned[0].partyId : undefined;
   }
 
-  private async assertSponsorIsActive(userId: string): Promise<void> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { isActive: true },
+  private async assertSponsorIsUsable(partyId: number): Promise<void> {
+    const party = await this.prisma.party.findUnique({
+      where: { id: partyId },
+      select: { isActive: true, nameTa: true },
     });
 
-    if (!user) throw new NotFoundException(`User ${userId} was not found`);
-    if (!user.isActive) throw new BadRequestException('That account is deactivated');
+    if (!party) throw new NotFoundException(`Party ${partyId} was not found`);
+    if (!party.isActive) throw new BadRequestException(`${party.nameTa} is retired`);
   }
 
   private assertTimes(startTime: string, endTime?: string): void {
@@ -450,13 +462,15 @@ export class EventsService {
     };
   }
 
-  private toSponsor(row: SponsorRow, canSeeContact: boolean): SponsorUserDto {
+  private toSponsor(row: SponsorRow, canSeeContact: boolean): SponsorPartyDto {
     return {
       id: row.id,
-      fullName: row.fullName ?? row.nameTa,
-      email: canSeeContact ? row.email : null,
+      name: row.nameTa,
+      nameEn: row.nameEn ?? '',
+      email: canSeeContact ? (row.user?.email ?? null) : null,
       phone: canSeeContact ? row.phone : null,
-      address: row.address,
+      address: row.user?.address ?? '',
+      userId: row.userId,
     };
   }
 
@@ -473,7 +487,7 @@ export class EventsService {
       startTime: dateToTime(event.startTime),
       endTime: event.endTime ? dateToTime(event.endTime) : null,
       sponsorNameTa: event.sponsor?.nameTa ?? null,
-      sponsorNameEn: event.sponsor ? (event.sponsor.fullName ?? event.sponsor.nameTa) : null,
+      sponsorNameEn: event.sponsor ? (event.sponsor.nameEn ?? event.sponsor.nameTa) : null,
       notes: event.notes,
       isCompleted: event.isCompleted,
     };
@@ -488,7 +502,7 @@ export class EventsService {
       scheduledDate: event.scheduledDate.toISOString().slice(0, 10),
       startTime: dateToTime(event.startTime),
       endTime: event.endTime ? dateToTime(event.endTime) : null,
-      sponsorId: event.sponsorId,
+      sponsorPartyId: event.sponsorPartyId,
       notes: event.notes,
       isCompleted: event.isCompleted,
       createdAt: event.createdAt,
