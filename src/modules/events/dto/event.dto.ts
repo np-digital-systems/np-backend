@@ -6,7 +6,6 @@ import {
   IsInt,
   IsOptional,
   IsString,
-  IsUUID,
   Matches,
   Max,
   MaxLength,
@@ -14,7 +13,7 @@ import {
 } from 'class-validator';
 
 import { EventTypeDto } from '../../event-types/dto/event-type.dto';
-import { SponsorUserDto } from '../../sponsors/dto/sponsor.dto';
+import { SponsorPartyDto } from '../../sponsors/dto/sponsor.dto';
 
 const TIME = /^([01]\d|2[0-3]):[0-5]\d$/;
 
@@ -26,13 +25,13 @@ export class EventRecordDto {
   @ApiProperty({ example: '2026-10-01' }) scheduledDate!: string;
   @ApiProperty({ example: '18:30' }) startTime!: string;
   @ApiProperty({ nullable: true, example: '20:00' }) endTime!: string | null;
-  @ApiProperty({ nullable: true }) sponsorId!: string | null;
+  @ApiProperty({ nullable: true }) sponsorPartyId!: number | null;
   @ApiProperty({ nullable: true }) notes!: string | null;
   @ApiProperty() isCompleted!: boolean;
   @ApiProperty() createdAt!: Date;
   @ApiProperty() updatedAt!: Date;
   @ApiProperty({ type: EventTypeDto }) eventType!: EventTypeDto;
-  @ApiProperty({ type: SponsorUserDto, nullable: true }) sponsor!: SponsorUserDto | null;
+  @ApiProperty({ type: SponsorPartyDto, nullable: true }) sponsor!: SponsorPartyDto | null;
   @ApiProperty({ example: 'Week 24' }) instanceLabel!: string;
   @ApiProperty({ enum: ['Completed', 'Today', 'Pending Approval', 'Scheduled'] }) status!: string;
   @ApiProperty({ description: 'Past and nobody marked it done' }) isOverdue!: boolean;
@@ -43,12 +42,12 @@ export class ScheduleSlotDto {
   @ApiProperty() instanceLabel!: string;
   @ApiProperty({ nullable: true }) customInstanceName!: string | null;
   @ApiProperty({
-    type: SponsorUserDto,
+    type: SponsorPartyDto,
     nullable: true,
     description:
       'The sponsor offered by default — one registered against this instance, else one registered against the whole event type',
   })
-  defaultSponsor!: SponsorUserDto | null;
+  defaultSponsor!: SponsorPartyDto | null;
   @ApiProperty({ description: 'How many registered sponsors stand for this slot' })
   sponsorCount!: number;
   @ApiProperty({
@@ -106,11 +105,14 @@ export class CreateEventDto {
   endTime?: string;
 
   @ApiPropertyOptional({
-    description: 'Defaults to this slot’s registered sponsor, when exactly one is registered',
+    description:
+      'The party sponsoring this occurrence. Defaults to the slot’s registered sponsor, when exactly one is registered',
   })
   @IsOptional()
-  @IsUUID()
-  sponsorId?: string;
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  sponsorPartyId?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -143,8 +145,10 @@ export class UpdateEventDto {
 
   @ApiPropertyOptional({ nullable: true })
   @IsOptional()
-  @IsUUID()
-  sponsorId?: string;
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  sponsorPartyId?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
