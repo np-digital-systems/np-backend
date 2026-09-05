@@ -1,6 +1,15 @@
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
-import { IsEnum, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  MaxLength,
+  Min,
+} from 'class-validator';
 
 import { FrequencyType } from '../../../generated/prisma/enums';
 
@@ -24,6 +33,33 @@ export class EventTypeRecordDto extends EventTypeDto {
   @ApiProperty({ description: 'Sponsors registered against this type' }) sponsorSlots!: number;
   @ApiProperty({ description: 'Dated occurrences on the calendar for the active year' })
   scheduledCount!: number;
+}
+
+/** One slot of a type, with the arrangement standing against it. */
+export class EventSlotDto {
+  @ApiProperty() id!: number;
+  @ApiProperty() instanceIdentifier!: number;
+  @ApiProperty({ nullable: true, description: "The temple's own name for this slot" })
+  customInstanceName!: string | null;
+  @ApiProperty({ description: 'Rendered from the frequency where there is no name' })
+  instanceLabel!: string;
+  @ApiProperty() isActive!: boolean;
+  @ApiProperty({ description: 'Everyone who takes this slot' }) sponsorNames!: string[];
+  @ApiProperty({ description: 'Occurrences dated against it this year' })
+  scheduledCount!: number;
+}
+
+export class UpdateEventSlotDto {
+  @ApiPropertyOptional({ description: "The temple's own name — a Tamil month, or சப்பரம்" })
+  @IsOptional()
+  @IsString()
+  @MaxLength(160)
+  customInstanceName?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
 }
 
 export class CreateEventTypeDto {
