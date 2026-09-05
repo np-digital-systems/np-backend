@@ -1,15 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import {
-  IsEnum,
-  IsInt,
-  IsOptional,
-  IsString,
-  Max,
-  MaxLength,
-  Min,
-  ValidateIf,
-} from 'class-validator';
+import { IsEnum, IsInt, IsOptional, Max, Min, ValidateIf } from 'class-validator';
 
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 import { FrequencyType, PartyKind } from '../../../generated/prisma/enums';
@@ -84,12 +75,6 @@ export class CreateSponsorDto {
   @Max(366)
   instanceIdentifier?: number;
 
-  @ApiPropertyOptional({ description: "The temple's own name for the day, if it has one" })
-  @IsOptional()
-  @IsString()
-  @MaxLength(160)
-  customInstanceName?: string;
-
   @ApiProperty({ description: 'The party sponsoring the slot' })
   @Type(() => Number)
   @IsInt()
@@ -125,12 +110,6 @@ export class UpdateSponsorDto {
   @Min(1)
   @Max(366)
   instanceIdentifier?: number | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(160)
-  customInstanceName?: string;
 }
 
 export class QuerySponsorsDto {

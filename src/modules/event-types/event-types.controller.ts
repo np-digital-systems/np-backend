@@ -18,6 +18,8 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import type { ActorContext } from '../../common/types/authenticated-user';
 import {
   CreateEventTypeDto,
+  EventSlotDto,
+  UpdateEventSlotDto,
   EventTypeRecordDto,
   QueryEventTypesDto,
   UpdateEventTypeDto,
@@ -41,6 +43,24 @@ export class EventTypesController {
   @RequirePermissions('event:view')
   findOne(@Param('id', ParseIntPipe) id: number): Promise<EventTypeRecordDto> {
     return this.eventTypes.findOneOrFail(id);
+  }
+
+  @Get(':id/slots')
+  @RequirePermissions('event:view')
+  @ApiOperation({ summary: "A type's slots — the fixed structure of its year" })
+  slots(@Param('id', ParseIntPipe) id: number): Promise<EventSlotDto[]> {
+    return this.eventTypes.slots(id);
+  }
+
+  @Patch('slots/:slotId')
+  @RequirePermissions('event-type:manage')
+  @ApiOperation({ summary: 'Name a slot, or retire one' })
+  updateSlot(
+    @Param('slotId', ParseIntPipe) slotId: number,
+    @Body() dto: UpdateEventSlotDto,
+    @Actor() context: ActorContext,
+  ): Promise<EventSlotDto> {
+    return this.eventTypes.updateSlot(slotId, dto, context);
   }
 
   @Post()

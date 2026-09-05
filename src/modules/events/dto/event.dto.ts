@@ -93,12 +93,6 @@ export class CreateEventDto {
   @Max(366)
   instanceIdentifier!: number;
 
-  @ApiPropertyOptional({ description: "The temple's own name for the day" })
-  @IsOptional()
-  @IsString()
-  @MaxLength(160)
-  customInstanceName?: string;
-
   @ApiProperty({ example: '2026-10-01' })
   @IsDateString()
   scheduledDate!: string;
@@ -130,12 +124,6 @@ export class CreateEventDto {
 }
 
 export class UpdateEventDto {
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsString()
-  @MaxLength(160)
-  customInstanceName?: string;
-
   @ApiPropertyOptional()
   @IsOptional()
   @IsDateString()
