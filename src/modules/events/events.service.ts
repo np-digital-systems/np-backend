@@ -261,6 +261,7 @@ export class EventsService {
     const type = slot.eventType;
 
     this.assertTimes(dto.startTime, dto.endTime);
+    await this.assertFreeThatYear(slot.id, new Date(dto.scheduledDate));
 
     // An occurrence falls to its slot's registered sponsor unless one is named.
     const sponsorPartyId = dto.sponsorPartyId ?? (await this.standingSponsor(slot.id));
@@ -310,6 +311,11 @@ export class EventsService {
     }
 
     this.assertTimes(dto.startTime ?? dateToTime(before.startTime), dto.endTime);
+
+    if (dto.scheduledDate) {
+      await this.assertFreeThatYear(before.slotId, new Date(dto.scheduledDate), id);
+    }
+
     if (dto.sponsorPartyId) await this.assertSponsorIsUsable(dto.sponsorPartyId);
 
     // As on create: naming the day names the slot it belongs to.
@@ -471,6 +477,39 @@ export class EventsService {
     }
 
     return slot;
+  }
+
+  /**
+   * A slot is set out once a year.
+   *
+   * The database refuses a second one outright; this says which occurrence is
+   * already there, so a clerk is told what they collided with rather than that
+   * something already exists.
+   */
+  private async assertFreeThatYear(
+    slotId: number,
+    scheduledDate: Date,
+    exceptId?: number,
+  ): Promise<void> {
+    const year = scheduledDate.getUTCFullYear();
+
+    const existing = await this.prisma.event.findFirst({
+      where: {
+        slotId,
+        id: exceptId ? { not: exceptId } : undefined,
+        scheduledDate: {
+          gte: new Date(Date.UTC(year, 0, 1)),
+          lt: new Date(Date.UTC(year + 1, 0, 1)),
+        },
+      },
+      include: { slot: { include: { eventType: true } } },
+    });
+
+    if (!existing) return;
+
+    throw new ConflictException(
+      `${existing.slot.eventType.nameTa} instance ${existing.slot.instanceIdentifier} is already set out for ${year}, on ${existing.scheduledDate.toISOString().slice(0, 10)}`,
+    );
   }
 
   private assertTimes(startTime: string, endTime?: string): void {
