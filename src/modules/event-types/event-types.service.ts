@@ -40,10 +40,10 @@ export class EventTypesService {
     });
 
     const [sponsors, scheduled] = await Promise.all([
-      // Sponsors reach their type through a slot, so they are rolled up the
-      // same way the occurrences below are.
+      // A sponsorship names its type directly, placed or not, so the count
+      // includes the people registered for the type but not yet given a slot.
       this.prisma.eventTypeSponsor.findMany({
-        select: { slot: { select: { eventTypeId: true } } },
+        select: { eventTypeId: true },
       }),
       // Events reach their type through a slot, so they are counted by slot
       // and rolled up rather than grouped on a column that no longer exists.
@@ -56,7 +56,7 @@ export class EventTypesService {
     const sponsorCount = new Map<number, number>();
 
     for (const row of sponsors) {
-      sponsorCount.set(row.slot.eventTypeId, (sponsorCount.get(row.slot.eventTypeId) ?? 0) + 1);
+      sponsorCount.set(row.eventTypeId, (sponsorCount.get(row.eventTypeId) ?? 0) + 1);
     }
     const eventCount = new Map<number, number>();
 
@@ -75,7 +75,7 @@ export class EventTypesService {
     if (!type) throw new NotFoundException(`Event type ${id} was not found`);
 
     const [sponsorSlots, scheduledCount] = await Promise.all([
-      this.prisma.eventTypeSponsor.count({ where: { slot: { eventTypeId: id } } }),
+      this.prisma.eventTypeSponsor.count({ where: { eventTypeId: id } }),
       this.prisma.event.count({ where: { slot: { eventTypeId: id }, ...this.withinYear(year) } }),
     ]);
 
