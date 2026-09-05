@@ -226,8 +226,6 @@ model User {
   closedFinancialYear FinancialYear[]
   vouchersCreated     Voucher[]             @relation("VoucherCreatedBy")
   vouchersDecided     Voucher[]             @relation("VoucherDecidedBy")
-  sponsorships        EventTypeSponsor[]
-  eventsSponsored     Event[]
   subscriptionsPaid   SanththaPayment[]     @relation("SanththaPayer")
   subscriptionsTaken  SanththaPayment[]     @relation("SanththaCollector")
   auditEntries        AuditLog[]
@@ -441,23 +439,47 @@ model Activity {
  * who will never log in simply has none.
  */
 model Party {
-  id        Int       @id @default(autoincrement())
-  nameTa    String    @map("name_ta")
-  nameEn    String?   @map("name_en")
-  kind      PartyKind @default(devotee)
-  userId    String?   @unique(map: "parties_user_id_key") @map("user_id") @db.Uuid
+  id        Int      @id @default(autoincrement())
+  nameTa    String   @map("name_ta")
+  nameEn    String?  @map("name_en")
+  userId    String?  @unique(map: "parties_user_id_key") @map("user_id") @db.Uuid
   phone     String?
-  isActive  Boolean   @default(true) @map("is_active")
-  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  user                 User?         @relation(fields: [userId], references: [id])
+  user                 User?              @relation(fields: [userId], references: [id])
+  roles                PartyRole[]
   vouchers             Voucher[]
   ledgerLines          LedgerEntry[]
   defaultForActivities Activity[]
+  sponsorships         EventTypeSponsor[]
+  eventsSponsored      Event[]
 
-  @@index([kind, isActive], map: "parties_kind")
+  @@index([isActive], map: "parties_active")
   @@index([nameTa(ops: raw("gin_trgm_ops"))], map: "parties_name", type: Gin)
   @@map("parties")
+}
+
+/*
+ * What a party is to the temple, as a set rather than a single label.
+ *
+ * One person may sponsor the Friday abhishekam and sell the temple its flowers.
+ * That is two roles of one party, not two parties — filing them separately
+ * would split their history in half and leave no screen able to say what the
+ * temple's dealings with them amount to.
+ *
+ * The role groups a list and nothing more. What an entry means is settled by
+ * the account it is coded to, never by this.
+ */
+model PartyRole {
+  partyId Int       @map("party_id")
+  kind    PartyKind
+
+  party Party @relation(fields: [partyId], references: [id], onDelete: Cascade)
+
+  @@id([partyId, kind])
+  @@index([kind], map: "party_roles_kind")
+  @@map("party_roles")
 }
 
 model BankAccount {
@@ -700,17 +722,17 @@ model EventTypeSponsor {
   eventTypeId        Int      @map("event_type_id")
   instanceIdentifier Int?     @map("instance_identifier") @db.SmallInt
   customInstanceName String?  @map("custom_instance_name")
-  userId             String   @map("user_id") @db.Uuid
+  partyId            Int      @map("party_id")
   createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   eventType EventType @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
-  user      User      @relation(fields: [userId], references: [id])
+  party     Party     @relation(fields: [partyId], references: [id])
 
   // Postgres treats NULLs as distinct, so type-wide rows (null instance) are
   // deduplicated in the service instead — see SponsorsService.assertNotDuplicate.
-  @@unique([eventTypeId, instanceIdentifier, userId], map: "one_sponsor_per_slot")
+  @@unique([eventTypeId, instanceIdentifier, partyId], map: "one_sponsor_per_slot")
   @@index([eventTypeId, instanceIdentifier], map: "sponsors_by_slot")
-  @@index([userId], map: "sponsors_by_user")
+  @@index([partyId], map: "sponsors_by_party")
   @@map("event_type_sponsors")
 }
 
@@ -722,19 +744,19 @@ model Event {
   scheduledDate      DateTime  @map("scheduled_date") @db.Date
   startTime          DateTime  @map("start_time") @db.Time(6)
   endTime            DateTime? @map("end_time") @db.Time(6)
-  sponsorId          String?   @map("sponsor_id") @db.Uuid
+  sponsorPartyId     Int?      @map("sponsor_party_id")
   notes              String?
   isCompleted        Boolean   @default(false) @map("is_completed")
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   eventType    EventType     @relation(fields: [eventTypeId], references: [id])
-  sponsor      User?         @relation(fields: [sponsorId], references: [id])
+  sponsor      Party?        @relation(fields: [sponsorPartyId], references: [id])
   voucherLines VoucherLine[]
 
   @@index([scheduledDate], map: "events_calendar")
   @@index([eventTypeId, instanceIdentifier], map: "events_by_slot")
-  @@index([sponsorId], map: "events_sponsor")
+  @@index([sponsorPartyId], map: "events_sponsor")
   @@map("events")
 }
 
