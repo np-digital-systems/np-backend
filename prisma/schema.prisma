@@ -333,18 +333,15 @@ model Account {
   openingBalance Decimal     @default(0) @map("opening_balance") @db.Decimal(14, 2)
   // Offered when this head is chosen. A kurukkal honorarium is always paid to
   // the same person, so the head remembers rather than the clerk retyping.
-  defaultPartyId Int?        @map("default_party_id")
   createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
 
   parent       Account?      @relation("AccountTree", fields: [parentId], references: [id])
   children     Account[]     @relation("AccountTree")
-  defaultParty Party?        @relation(fields: [defaultPartyId], references: [id])
   bankAccount  BankAccount?
   voucherLines VoucherLine[]
   ledgerLines  LedgerEntry[]
 
   @@index([parentId], map: "accounts_parent")
-  @@index([defaultPartyId], map: "accounts_default_party")
   @@map("accounts")
 }
 
@@ -381,6 +378,7 @@ model Project {
   fund         Fund          @relation(fields: [fundId], references: [id])
   voucherLines VoucherLine[]
   ledgerLines  LedgerEntry[]
+  activities   Activity[]
 
   @@index([fundId, status], map: "projects_fund")
   @@map("projects")
@@ -401,19 +399,32 @@ model Activity {
   nameTa        String       @unique(map: "activities_name_ta_key") @map("name_ta")
   nameEn        String?      @map("name_en")
   kind          ActivityKind @default(general)
-  // Offered when the activity is chosen, so a clerk answers it once here
-  // rather than on every receipt. Still editable on the voucher.
-  defaultFundId Int?         @map("default_fund_id")
+  /*
+   * The coding a line takes when this activity is chosen, answered once here
+   * instead of on every voucher. All three stay editable on the entry itself:
+   * a default is what is usually true, never a rule.
+   *
+   * The party sits here rather than on the ledger head because a head is too
+   * coarse to know — `5200 Salaries` serves the kurukkal, the melam group and
+   * the chef, while an activity is only ever one of them.
+   */
+  defaultFundId    Int?      @map("default_fund_id")
+  defaultProjectId Int?      @map("default_project_id")
+  defaultPartyId   Int?      @map("default_party_id")
   isActive      Boolean      @default(true) @map("is_active")
   createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  defaultFund  Fund?         @relation(fields: [defaultFundId], references: [id])
+  defaultFund    Fund?    @relation(fields: [defaultFundId], references: [id])
+  defaultProject Project? @relation(fields: [defaultProjectId], references: [id])
+  defaultParty   Party?   @relation(fields: [defaultPartyId], references: [id])
   eventTypes   EventType[]
   voucherLines VoucherLine[]
   ledgerLines  LedgerEntry[]
 
   @@index([kind, isActive], map: "activities_kind")
   @@index([defaultFundId], map: "activities_default_fund")
+  @@index([defaultProjectId], map: "activities_default_project")
+  @@index([defaultPartyId], map: "activities_default_party")
   @@map("activities")
 }
 
@@ -439,10 +450,10 @@ model Party {
   isActive  Boolean   @default(true) @map("is_active")
   createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  user            User?         @relation(fields: [userId], references: [id])
-  vouchers        Voucher[]
-  ledgerLines     LedgerEntry[]
-  defaultForHeads Account[]
+  user                 User?         @relation(fields: [userId], references: [id])
+  vouchers             Voucher[]
+  ledgerLines          LedgerEntry[]
+  defaultForActivities Activity[]
 
   @@index([kind, isActive], map: "parties_kind")
   @@index([nameTa(ops: raw("gin_trgm_ops"))], map: "parties_name", type: Gin)
