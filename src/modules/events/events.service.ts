@@ -36,13 +36,13 @@ const SPONSOR_SELECT = {
 } satisfies Prisma.PartySelect;
 
 const EVENT_INCLUDE = {
-  eventType: true,
+  slot: { include: { eventType: true } },
   sponsor: { select: SPONSOR_SELECT },
 } satisfies Prisma.EventInclude;
 
 /** The public site sees a sponsor's name and nothing else — see PublicEventDto. */
 const PUBLIC_INCLUDE = {
-  eventType: true,
+  slot: { include: { eventType: true } },
   sponsor: { select: { nameTa: true, nameEn: true } },
 } satisfies Prisma.EventInclude;
 
@@ -68,7 +68,7 @@ export class EventsService {
   async findMany(query: QueryEventsDto, canSeeContact: boolean): Promise<EventRecordDto[]> {
     const events = await this.prisma.event.findMany({
       where: {
-        eventTypeId: query.eventTypeId,
+        slot: query.eventTypeId ? { eventTypeId: query.eventTypeId } : undefined,
         isCompleted: query.isCompleted,
         sponsorPartyId: query.unsponsoredOnly ? null : undefined,
         scheduledDate: this.dateRange(query),
@@ -124,6 +124,7 @@ export class EventsService {
     const types = await this.prisma.eventType.findMany({
       where: { id: eventTypeId },
       orderBy: { nameTa: 'asc' },
+      include: { slots: { orderBy: { instanceIdentifier: 'asc' } } },
     });
 
     const ids = types.map((type) => type.id);
@@ -134,24 +135,24 @@ export class EventsService {
         include: { party: { select: SPONSOR_SELECT } },
       }),
       this.prisma.event.findMany({
-        where: { eventTypeId: { in: ids }, scheduledDate: this.yearRange(year) },
+        where: { slot: { eventTypeId: { in: ids } }, scheduledDate: this.yearRange(year) },
         include: EVENT_INCLUDE,
       }),
     ]);
 
-    const slotKey = (typeId: number, instance: number) => `${typeId}:${instance}`;
-
-    // A slot can hold several dates in a year — a monthly type has one instance
-    // and twelve occurrences — so the events are grouped rather than indexed,
-    // and the earliest stands for the slot.
-    const dated = new Map<string, typeof events>();
+    /*
+     * A slot can hold several dates in one year — a monthly pooja falling twice
+     * in a Tamil month, or thirteen times across a Gregorian one — so its
+     * occurrences are grouped rather than indexed, and the earliest stands for
+     * the slot on this screen.
+     */
+    const dated = new Map<number, typeof events>();
 
     for (const row of events) {
-      const key = slotKey(row.eventTypeId, row.instanceIdentifier);
-      const group = dated.get(key);
+      const group = dated.get(row.slotId);
 
       if (group) group.push(row);
-      else dated.set(key, [row]);
+      else dated.set(row.slotId, [row]);
     }
 
     for (const group of dated.values()) {
@@ -159,31 +160,29 @@ export class EventsService {
     }
 
     return types.map((type) => {
-      // Sponsors registered against the type as a whole stand for every slot;
-      // ones pinned to an instance are preferred where they exist.
-      const typeWide = sponsors.filter(
-        (row) => row.eventTypeId === type.id && row.instanceIdentifier === null,
-      );
+      // A sponsor registered against the type as a whole stands for every slot;
+      // ones pinned to a slot are listed first.
+      const typeWide = sponsors.filter((row) => row.eventTypeId === type.id && row.slotId === null);
 
-      const slots = Array.from({ length: type.noOfInstances }, (_, index) => {
-        const instanceIdentifier = index + 1;
-        const pinned = sponsors.filter(
-          (row) => row.eventTypeId === type.id && row.instanceIdentifier === instanceIdentifier,
-        );
+      const slots = type.slots.map((slot) => {
+        const pinned = sponsors.filter((row) => row.slotId === slot.id);
         const candidates = [...pinned, ...typeWide];
-        const assignment = candidates[0];
-        const occurrences = dated.get(slotKey(type.id, instanceIdentifier)) ?? [];
+        const occurrences = dated.get(slot.id) ?? [];
         const event = occurrences[0];
 
         return {
-          instanceIdentifier,
+          slotId: slot.id,
+          instanceIdentifier: slot.instanceIdentifier,
           instanceLabel: describeInstance(
             type.frequencyType,
-            instanceIdentifier,
-            pinned[0]?.customInstanceName ?? event?.customInstanceName,
+            slot.instanceIdentifier,
+            slot.customInstanceName,
           ),
-          customInstanceName: pinned[0]?.customInstanceName ?? event?.customInstanceName ?? null,
-          defaultSponsor: assignment ? this.toSponsor(assignment.party, canSeeContact) : null,
+          customInstanceName: slot.customInstanceName,
+          // The shortlist this slot is scheduled from: everyone who takes it,
+          // for a clerk to choose one of when the year is set out.
+          sponsors: candidates.map((row) => this.toSponsor(row.party, canSeeContact)),
+          defaultSponsor: candidates[0] ? this.toSponsor(candidates[0].party, canSeeContact) : null,
           sponsorCount: candidates.length,
           eventCount: occurrences.length,
           event: event ? this.toRecord(event, canSeeContact) : null,
@@ -258,29 +257,31 @@ export class EventsService {
   }
 
   async create(dto: CreateEventDto, context: ActorContext): Promise<EventRecordDto> {
-    const type = await this.prisma.eventType.findUnique({ where: { id: dto.eventTypeId } });
-
-    if (!type) throw new NotFoundException(`Event type ${dto.eventTypeId} was not found`);
-
-    if (dto.instanceIdentifier > type.noOfInstances) {
-      throw new BadRequestException(
-        `${type.nameTa} has ${type.noOfInstances} instance(s); ${dto.instanceIdentifier} is out of range`,
-      );
-    }
+    const slot = await this.resolveSlot(dto.eventTypeId, dto.instanceIdentifier);
+    const type = slot.eventType;
 
     this.assertTimes(dto.startTime, dto.endTime);
 
     // An occurrence falls to its slot's registered sponsor unless one is named.
-    const sponsorPartyId =
-      dto.sponsorPartyId ?? (await this.standingSponsor(dto.eventTypeId, dto.instanceIdentifier));
+    const sponsorPartyId = dto.sponsorPartyId ?? (await this.standingSponsor(slot.id));
 
     if (sponsorPartyId) await this.assertSponsorIsUsable(sponsorPartyId);
 
+    /*
+     * Naming the day names its slot. The name belongs to the slot and is fixed
+     * for every year, so writing it here reaches through rather than keeping a
+     * second copy on the occurrence.
+     */
+    if (dto.customInstanceName !== undefined) {
+      await this.prisma.eventSlot.update({
+        where: { id: slot.id },
+        data: { customInstanceName: dto.customInstanceName || null },
+      });
+    }
+
     const event = await this.prisma.event.create({
       data: {
-        eventTypeId: dto.eventTypeId,
-        instanceIdentifier: dto.instanceIdentifier,
-        customInstanceName: dto.customInstanceName,
+        slotId: slot.id,
         scheduledDate: new Date(dto.scheduledDate),
         startTime: timeToDate(dto.startTime),
         endTime: dto.endTime ? timeToDate(dto.endTime) : undefined,
@@ -311,10 +312,17 @@ export class EventsService {
     this.assertTimes(dto.startTime ?? dateToTime(before.startTime), dto.endTime);
     if (dto.sponsorPartyId) await this.assertSponsorIsUsable(dto.sponsorPartyId);
 
+    // As on create: naming the day names the slot it belongs to.
+    if (dto.customInstanceName !== undefined) {
+      await this.prisma.eventSlot.update({
+        where: { id: before.slotId },
+        data: { customInstanceName: dto.customInstanceName || null },
+      });
+    }
+
     const event = await this.prisma.event.update({
       where: { id },
       data: {
-        customInstanceName: dto.customInstanceName,
         scheduledDate: dto.scheduledDate ? new Date(dto.scheduledDate) : undefined,
         startTime: dto.startTime ? timeToDate(dto.startTime) : undefined,
         endTime: dto.endTime ? timeToDate(dto.endTime) : undefined,
@@ -328,7 +336,7 @@ export class EventsService {
       action: 'update',
       entity: 'event',
       entityRef: String(id),
-      summary: `Updated ${event.eventType.nameTa} on ${event.scheduledDate.toISOString().slice(0, 10)}`,
+      summary: `Updated ${event.slot.eventType.nameTa} on ${event.scheduledDate.toISOString().slice(0, 10)}`,
       diff: AuditService.diff(
         {
           scheduledDate: before.scheduledDate,
@@ -370,7 +378,7 @@ export class EventsService {
       action: 'update',
       entity: 'event',
       entityRef: String(id),
-      summary: `Marked ${event.eventType.nameTa} on ${event.scheduledDate.toISOString().slice(0, 10)} as ${isCompleted ? 'complete' : 'not complete'}`,
+      summary: `Marked ${event.slot.eventType.nameTa} on ${event.scheduledDate.toISOString().slice(0, 10)} as ${isCompleted ? 'complete' : 'not complete'}`,
     });
 
     return this.toRecord(event, true);
@@ -395,7 +403,7 @@ export class EventsService {
       action: 'delete',
       entity: 'event',
       entityRef: String(id),
-      summary: `Removed ${event.eventType.nameTa} on ${event.scheduledDate.toISOString().slice(0, 10)} from the calendar`,
+      summary: `Removed ${event.slot.eventType.nameTa} on ${event.scheduledDate.toISOString().slice(0, 10)} from the calendar`,
     });
   }
 
@@ -406,12 +414,16 @@ export class EventsService {
    * instance. Once a slot has several, picking one for the user would be a
    * guess, so the occurrence is left unsponsored for someone to decide.
    */
-  private async standingSponsor(
-    eventTypeId: number,
-    instanceIdentifier: number,
-  ): Promise<number | undefined> {
+  /**
+   * The sponsor an occurrence falls to when none is named.
+   *
+   * Only where the slot has exactly one. Several devotees sharing a slot is a
+   * shortlist, and which of them takes a given year is a decision somebody
+   * makes — guessing would put a name on a receipt that nobody chose.
+   */
+  private async standingSponsor(slotId: number): Promise<number | undefined> {
     const pinned = await this.prisma.eventTypeSponsor.findMany({
-      where: { eventTypeId, instanceIdentifier },
+      where: { slotId },
       select: { partyId: true },
       take: 2,
     });
@@ -427,6 +439,38 @@ export class EventsService {
 
     if (!party) throw new NotFoundException(`Party ${partyId} was not found`);
     if (!party.isActive) throw new BadRequestException(`${party.nameTa} is retired`);
+  }
+
+  /**
+   * The slot an occurrence belongs to, by type and instance number.
+   *
+   * Writes still name a type and a number, which is how a clerk thinks of it;
+   * the slot row is the identity everything else hangs from. Refusing an
+   * instance the type does not declare is what a loose pair could never do.
+   */
+  private async resolveSlot(eventTypeId: number, instanceIdentifier: number) {
+    const slot = await this.prisma.eventSlot.findUnique({
+      where: {
+        eventTypeId_instanceIdentifier: { eventTypeId, instanceIdentifier },
+      },
+      include: { eventType: true },
+    });
+
+    if (!slot) {
+      const type = await this.prisma.eventType.findUnique({ where: { id: eventTypeId } });
+
+      if (!type) throw new NotFoundException(`Event type ${eventTypeId} was not found`);
+
+      throw new BadRequestException(
+        `${type.nameTa} has ${type.noOfInstances} instance(s); ${instanceIdentifier} is out of range`,
+      );
+    }
+
+    if (!slot.isActive) {
+      throw new ConflictException(`That instance of ${slot.eventType.nameTa} is retired`);
+    }
+
+    return slot;
   }
 
   private assertTimes(startTime: string, endTime?: string): void {
@@ -449,7 +493,7 @@ export class EventsService {
     return { gte: new Date(Date.UTC(year, 0, 1)), lt: new Date(Date.UTC(year + 1, 0, 1)) };
   }
 
-  private toEventType(type: EventRow['eventType']) {
+  private toEventType(type: EventRow['slot']['eventType']) {
     return {
       id: type.id,
       name: type.nameTa,
@@ -477,12 +521,12 @@ export class EventsService {
   private toPublic(event: PublicEventRow): PublicEventDto {
     return {
       id: event.id,
-      eventTypeId: event.eventTypeId,
-      nameTa: event.eventType.nameTa,
-      nameEn: event.eventType.nameEn ?? event.eventType.nameTa,
-      frequencyType: event.eventType.frequencyType,
-      instanceIdentifier: event.instanceIdentifier,
-      customInstanceName: event.customInstanceName,
+      eventTypeId: event.slot.eventTypeId,
+      nameTa: event.slot.eventType.nameTa,
+      nameEn: event.slot.eventType.nameEn ?? event.slot.eventType.nameTa,
+      frequencyType: event.slot.eventType.frequencyType,
+      instanceIdentifier: event.slot.instanceIdentifier,
+      customInstanceName: event.slot.customInstanceName,
       scheduledDate: event.scheduledDate.toISOString().slice(0, 10),
       startTime: dateToTime(event.startTime),
       endTime: event.endTime ? dateToTime(event.endTime) : null,
@@ -496,9 +540,9 @@ export class EventsService {
   private toRecord(event: EventRow, canSeeContact: boolean): EventRecordDto {
     return {
       id: event.id,
-      eventTypeId: event.eventTypeId,
-      instanceIdentifier: event.instanceIdentifier,
-      customInstanceName: event.customInstanceName,
+      eventTypeId: event.slot.eventTypeId,
+      instanceIdentifier: event.slot.instanceIdentifier,
+      customInstanceName: event.slot.customInstanceName,
       scheduledDate: event.scheduledDate.toISOString().slice(0, 10),
       startTime: dateToTime(event.startTime),
       endTime: event.endTime ? dateToTime(event.endTime) : null,
@@ -507,12 +551,12 @@ export class EventsService {
       isCompleted: event.isCompleted,
       createdAt: event.createdAt,
       updatedAt: event.updatedAt,
-      eventType: this.toEventType(event.eventType),
+      eventType: this.toEventType(event.slot.eventType),
       sponsor: event.sponsor ? this.toSponsor(event.sponsor, canSeeContact) : null,
       instanceLabel: describeInstance(
-        event.eventType.frequencyType,
-        event.instanceIdentifier,
-        event.customInstanceName,
+        event.slot.eventType.frequencyType,
+        event.slot.instanceIdentifier,
+        event.slot.customInstanceName,
       ),
       status: deriveEventStatus(event.scheduledDate, event.isCompleted),
       isOverdue: isOverdue(event.scheduledDate, event.isCompleted),

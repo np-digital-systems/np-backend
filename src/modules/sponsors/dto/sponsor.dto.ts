@@ -51,6 +51,8 @@ export class EventTypeSummaryDto {
 export class SponsorAssignmentDto {
   @ApiProperty() id!: number;
   @ApiProperty() eventTypeId!: number;
+  @ApiProperty({ nullable: true, description: 'The slot taken, or null for the whole type' })
+  slotId!: number | null;
   @ApiProperty({ nullable: true, description: 'Null when the sponsor covers the whole event type' })
   instanceIdentifier!: number | null;
   @ApiProperty({ nullable: true }) customInstanceName!: string | null;
