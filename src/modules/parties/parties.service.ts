@@ -8,9 +8,26 @@ import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { LedgerQueryService, type Sides } from '../ledger/ledger-query.service';
 import { CreatePartyDto, PartyRecordDto, QueryPartiesDto, UpdatePartyDto } from './dto/party.dto';
 
-type PartyRow = Prisma.PartyGetPayload<Record<string, never>>;
+const PARTY_INCLUDE = { roles: true } satisfies Prisma.PartyInclude;
+
+type PartyRow = Prisma.PartyGetPayload<{ include: typeof PARTY_INCLUDE }>;
 
 const round = (value: number) => Math.round(value * 100) / 100;
+
+/*
+ * Roles read in a fixed order rather than however the rows came back, so the
+ * same party is described the same way on every screen it appears on.
+ */
+const KIND_ORDER: PartyKind[] = [
+  PartyKind.sponsor,
+  PartyKind.staff,
+  PartyKind.vendor,
+  PartyKind.devotee,
+];
+
+function kindsOf(party: PartyRow): PartyKind[] {
+  return KIND_ORDER.filter((kind) => party.roles.some((role) => role.kind === kind));
+}
 
 /**
  * Parties — who an entry was with.
@@ -30,7 +47,9 @@ export class PartiesService {
   async findMany(query: QueryPartiesDto): Promise<PartyRecordDto[]> {
     const parties = await this.prisma.party.findMany({
       where: {
-        kind: query.kind,
+        // `some` rather than an equality: a florist who also sponsors a pooja
+        // belongs in both lists, and is the same record in each.
+        roles: query.kind ? { some: { kind: query.kind } } : undefined,
         isActive: query.isActive,
         OR: query.search
           ? [
@@ -39,7 +58,10 @@ export class PartiesService {
             ]
           : undefined,
       },
-      orderBy: [{ kind: 'asc' }, { nameTa: 'asc' }],
+      include: PARTY_INCLUDE,
+      // A party no longer has one kind to sort by. The name is the only order
+      // that stays stable as roles are added and dropped.
+      orderBy: { nameTa: 'asc' },
     });
 
     const totals = await this.ledger.byDimensionAndType('partyId', query.financialYearId);
@@ -48,7 +70,10 @@ export class PartiesService {
   }
 
   async findOneOrFail(id: number, financialYearId?: number): Promise<PartyRecordDto> {
-    const party = await this.prisma.party.findUnique({ where: { id } });
+    const party = await this.prisma.party.findUnique({
+      where: { id },
+      include: PARTY_INCLUDE,
+    });
 
     if (!party) throw new NotFoundException(`Party ${id} was not found`);
 
@@ -60,44 +85,56 @@ export class PartiesService {
   async create(dto: CreatePartyDto, context: ActorContext): Promise<PartyRecordDto> {
     await this.assertUserIsFree(dto.userId ?? null, null);
 
+    const roles = dto.roles ?? [PartyKind.devotee];
+
     const party = await this.prisma.party.create({
       data: {
         nameTa: dto.nameTa,
         nameEn: dto.nameEn,
-        kind: dto.kind,
         userId: dto.userId ?? null,
         phone: dto.phone ?? null,
+        roles: { create: roles.map((kind) => ({ kind })) },
       },
+      include: PARTY_INCLUDE,
     });
 
     await this.audit.record(context, {
       action: 'create',
       entity: 'party',
       entityRef: String(party.id),
-      summary: `Added ${party.kind} ${party.nameTa}`,
+      summary: `Added ${party.nameTa} as ${roles.join(', ')}`,
     });
 
     return this.findOneOrFail(party.id);
   }
 
   async update(id: number, dto: UpdatePartyDto, context: ActorContext): Promise<PartyRecordDto> {
-    const before = await this.prisma.party.findUnique({ where: { id } });
+    const before = await this.prisma.party.findUnique({
+      where: { id },
+      include: PARTY_INCLUDE,
+    });
 
     if (!before) throw new NotFoundException(`Party ${id} was not found`);
 
     if (dto.userId !== undefined) await this.assertUserIsFree(dto.userId ?? null, id);
     if (dto.isActive === false) await this.assertNothingDependsOnIt(id, before.nameTa);
+    if (dto.roles) await this.assertRolesStillCovered(before, dto.roles);
 
     const party = await this.prisma.party.update({
       where: { id },
       data: {
         nameTa: dto.nameTa,
         nameEn: dto.nameEn,
-        kind: dto.kind,
         userId: dto.userId,
         phone: dto.phone,
         isActive: dto.isActive,
+        // Replaced wholesale rather than reconciled: a role set is what the
+        // party is now, and a row carries nothing but the pair that names it.
+        ...(dto.roles
+          ? { roles: { deleteMany: {}, create: dto.roles.map((kind) => ({ kind })) } }
+          : {}),
       },
+      include: PARTY_INCLUDE,
     });
 
     await this.audit.record(context, {
@@ -105,7 +142,10 @@ export class PartiesService {
       entity: 'party',
       entityRef: String(id),
       summary: `Updated ${party.nameTa}`,
-      diff: AuditService.diff(before, party),
+      diff: AuditService.diff(
+        { ...before, roles: kindsOf(before).join(', ') },
+        { ...party, roles: kindsOf(party).join(', ') },
+      ),
     });
 
     return this.findOneOrFail(id);
@@ -116,31 +156,31 @@ export class PartiesService {
   }
 
   /**
-   * The party standing behind a person who signs in, created on first need.
+   * Give an existing party a sign-in.
    *
-   * A sponsor exists on the calendar as a user long before anyone raises a
-   * receipt for them. Rather than asking a clerk to register them twice, the
-   * party is made the moment it is first wanted, and matched by user
-   * thereafter so the two never drift into separate records.
+   * The relationship runs this way round, not the other. A party is registered
+   * the moment the temple deals with them — a sponsor, a florist, the
+   * electricity board — and only some of them ever need an account. Minting a
+   * party from a user instead would ask for a login before anyone wanted one,
+   * which is what forced every sponsor to become a user in the first place.
    */
-  async forUser(userId: string): Promise<PartyRow> {
-    const existing = await this.prisma.party.findUnique({ where: { userId } });
+  async linkUser(id: number, userId: string, context: ActorContext): Promise<PartyRecordDto> {
+    await this.assertUserIsFree(userId, id);
 
-    if (existing) return existing;
-
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-
-    if (!user) throw new NotFoundException(`User ${userId} was not found`);
-
-    return this.prisma.party.create({
-      data: {
-        nameTa: user.nameTa,
-        nameEn: user.fullName,
-        kind: PartyKind.sponsor,
-        userId: user.id,
-        phone: user.phone,
-      },
+    const party = await this.prisma.party.update({
+      where: { id },
+      data: { userId },
+      include: PARTY_INCLUDE,
     });
+
+    await this.audit.record(context, {
+      action: 'update',
+      entity: 'party',
+      entityRef: String(id),
+      summary: `Linked ${party.nameTa} to a sign-in`,
+    });
+
+    return this.findOneOrFail(id);
   }
 
   private async assertUserIsFree(userId: string | null, exceptPartyId: number | null) {
@@ -172,6 +212,28 @@ export class PartiesService {
     }
   }
 
+  /*
+   * A role may be dropped freely except where the calendar still leans on it.
+   * Removing `sponsor` from someone with standing assignments would leave those
+   * rows naming a party the sponsor picker can no longer offer.
+   */
+  private async assertRolesStillCovered(party: PartyRow, roles: PartyKind[]): Promise<void> {
+    const heldSponsor = party.roles.some((role) => role.kind === PartyKind.sponsor);
+
+    if (!heldSponsor || roles.includes(PartyKind.sponsor)) return;
+
+    const [standing, occurrences] = await Promise.all([
+      this.prisma.eventTypeSponsor.count({ where: { partyId: party.id } }),
+      this.prisma.event.count({ where: { sponsorPartyId: party.id } }),
+    ]);
+
+    if (standing + occurrences > 0) {
+      throw new ConflictException(
+        `${party.nameTa} still sponsors ${standing} standing assignment(s) and ${occurrences} occurrence(s); clear those before dropping the sponsor role`,
+      );
+    }
+  }
+
   private toRecord(party: PartyRow, totals: Map<AccountType, Sides> | undefined): PartyRecordDto {
     const income = totals?.get(AccountType.income);
     const expense = totals?.get(AccountType.expense);
@@ -183,7 +245,7 @@ export class PartiesService {
       id: party.id,
       name: party.nameTa,
       nameEn: party.nameEn ?? '',
-      kind: party.kind,
+      roles: kindsOf(party),
       userId: party.userId,
       phone: party.phone,
       isActive: party.isActive,

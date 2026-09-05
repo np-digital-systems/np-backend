@@ -10,30 +10,36 @@ import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
+import { PartyKind } from '../../generated/prisma/enums';
 import {
   CreateSponsorDto,
   QueryDirectoryDto,
   QuerySponsorsDto,
   SponsorAssignmentDto,
-  SponsorUserDto,
+  SponsorPartyDto,
   UpdateSponsorDto,
 } from './dto/sponsor.dto';
 import { describeInstance } from './instance-label';
 
+/*
+ * Email and address live on the sign-in rather than the party, so they are
+ * read through the link where there is one. A sponsor who never signs in has
+ * a name and a phone number, which is all the temple ever had for them.
+ */
 const SPONSOR_SELECT = {
   id: true,
   nameTa: true,
-  fullName: true,
-  email: true,
+  nameEn: true,
   phone: true,
-  address: true,
-} satisfies Prisma.UserSelect;
+  userId: true,
+  user: { select: { email: true, address: true } },
+} satisfies Prisma.PartySelect;
 
-type SponsorRow = Prisma.UserGetPayload<{ select: typeof SPONSOR_SELECT }>;
+type SponsorRow = Prisma.PartyGetPayload<{ select: typeof SPONSOR_SELECT }>;
 
 const ASSIGNMENT_INCLUDE = {
   eventType: true,
-  user: { select: SPONSOR_SELECT },
+  party: { select: SPONSOR_SELECT },
 } satisfies Prisma.EventTypeSponsorInclude;
 
 type AssignmentRow = Prisma.EventTypeSponsorGetPayload<{ include: typeof ASSIGNMENT_INCLUDE }>;
@@ -53,30 +59,38 @@ export class SponsorsService {
     private readonly audit: AuditService,
   ) {}
 
+  /**
+   * Everyone who could be registered as a sponsor.
+   *
+   * Unfiltered by role on purpose. A florist the temple has only ever bought
+   * flowers from may sponsor a pooja next Friday, and should be findable
+   * without being re-registered as a second party — the act of registering
+   * them grants the role.
+   */
   async directory(
     query: QueryDirectoryDto,
     canSeeContact: boolean,
-  ): Promise<PageDto<SponsorUserDto>> {
-    const where: Prisma.UserWhereInput = {
+  ): Promise<PageDto<SponsorPartyDto>> {
+    const where: Prisma.PartyWhereInput = {
       isActive: true,
+      roles: query.kind ? { some: { kind: query.kind } } : undefined,
       OR: query.search
         ? [
             { nameTa: { contains: query.search, mode: 'insensitive' } },
-            { fullName: { contains: query.search, mode: 'insensitive' } },
-            { memberNo: { contains: query.search, mode: 'insensitive' } },
+            { nameEn: { contains: query.search, mode: 'insensitive' } },
           ]
         : undefined,
     };
 
     const [rows, total] = await this.prisma.$transaction([
-      this.prisma.user.findMany({
+      this.prisma.party.findMany({
         where,
         select: SPONSOR_SELECT,
-        orderBy: [{ fullName: 'asc' }, { nameTa: 'asc' }],
+        orderBy: { nameTa: 'asc' },
         skip: query.skip,
         take: query.limit,
       }),
-      this.prisma.user.count({ where }),
+      this.prisma.party.count({ where }),
     ]);
 
     return new PageDto(
@@ -129,24 +143,34 @@ export class SponsorsService {
 
   async create(dto: CreateSponsorDto, context: ActorContext): Promise<SponsorAssignmentDto> {
     await this.assertSlotExists(dto.eventTypeId, dto.instanceIdentifier);
-    await this.assertSponsorIsActive(dto.userId);
-    await this.assertNotDuplicate(dto.eventTypeId, dto.instanceIdentifier ?? null, dto.userId);
+    await this.assertPartyIsUsable(dto.partyId);
+    await this.assertNotDuplicate(dto.eventTypeId, dto.instanceIdentifier ?? null, dto.partyId);
 
-    const created = await this.prisma.eventTypeSponsor.create({
-      data: {
-        eventTypeId: dto.eventTypeId,
-        instanceIdentifier: dto.instanceIdentifier ?? null,
-        customInstanceName: dto.customInstanceName,
-        userId: dto.userId,
-      },
-      include: ASSIGNMENT_INCLUDE,
+    const created = await this.prisma.$transaction(async (tx) => {
+      // Sponsoring something is what makes a party a sponsor. Granting the role
+      // here is what lets the picker offer the temple's florist for next
+      // Friday's pooja without anyone registering them a second time.
+      await tx.partyRole.createMany({
+        data: [{ partyId: dto.partyId, kind: PartyKind.sponsor }],
+        skipDuplicates: true,
+      });
+
+      return tx.eventTypeSponsor.create({
+        data: {
+          eventTypeId: dto.eventTypeId,
+          instanceIdentifier: dto.instanceIdentifier ?? null,
+          customInstanceName: dto.customInstanceName,
+          partyId: dto.partyId,
+        },
+        include: ASSIGNMENT_INCLUDE,
+      });
     });
 
     await this.audit.record(context, {
       action: 'create',
       entity: 'event_type_sponsor',
       entityRef: String(created.id),
-      summary: `Registered ${this.nameOf(created.user)} as a sponsor of ${created.eventType.nameTa} (${this.labelOf(created)})`,
+      summary: `Registered ${this.nameOf(created.party)} as a sponsor of ${created.eventType.nameTa} (${this.labelOf(created)})`,
     });
 
     return this.toAssignment(created, NO_OCCURRENCES, true);
@@ -163,46 +187,53 @@ export class SponsorsService {
     });
 
     if (!before) throw new NotFoundException(`Sponsor ${id} was not found`);
-    if (dto.userId) await this.assertSponsorIsActive(dto.userId);
+    if (dto.partyId) await this.assertPartyIsUsable(dto.partyId);
 
     const eventTypeId = dto.eventTypeId ?? before.eventTypeId;
     const instanceIdentifier =
       dto.instanceIdentifier === undefined ? before.instanceIdentifier : dto.instanceIdentifier;
-    const userId = dto.userId ?? before.userId;
+    const partyId = dto.partyId ?? before.partyId;
 
     if (eventTypeId !== before.eventTypeId || instanceIdentifier !== before.instanceIdentifier) {
       await this.assertSlotExists(eventTypeId, instanceIdentifier ?? undefined);
     }
 
-    await this.assertNotDuplicate(eventTypeId, instanceIdentifier, userId, id);
+    await this.assertNotDuplicate(eventTypeId, instanceIdentifier, partyId, id);
 
-    const updated = await this.prisma.eventTypeSponsor.update({
-      where: { id },
-      data: {
-        eventTypeId,
-        instanceIdentifier,
-        userId,
-        customInstanceName: dto.customInstanceName,
-      },
-      include: ASSIGNMENT_INCLUDE,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      await tx.partyRole.createMany({
+        data: [{ partyId, kind: PartyKind.sponsor }],
+        skipDuplicates: true,
+      });
+
+      return tx.eventTypeSponsor.update({
+        where: { id },
+        data: {
+          eventTypeId,
+          instanceIdentifier,
+          partyId,
+          customInstanceName: dto.customInstanceName,
+        },
+        include: ASSIGNMENT_INCLUDE,
+      });
     });
 
     await this.audit.record(context, {
       action: 'update',
       entity: 'event_type_sponsor',
       entityRef: String(id),
-      summary: `Updated the ${updated.eventType.nameTa} sponsor ${this.nameOf(updated.user)} (${this.labelOf(updated)})`,
+      summary: `Updated the ${updated.eventType.nameTa} sponsor ${this.nameOf(updated.party)} (${this.labelOf(updated)})`,
       diff: AuditService.diff(
         {
           eventTypeId: before.eventTypeId,
           instanceIdentifier: before.instanceIdentifier,
-          userId: before.userId,
+          partyId: before.partyId,
           customInstanceName: before.customInstanceName,
         },
         {
           eventTypeId: updated.eventTypeId,
           instanceIdentifier: updated.instanceIdentifier,
-          userId: updated.userId,
+          partyId: updated.partyId,
           customInstanceName: updated.customInstanceName,
         },
       ),
@@ -225,7 +256,7 @@ export class SponsorsService {
       action: 'delete',
       entity: 'event_type_sponsor',
       entityRef: String(id),
-      summary: `Removed ${this.nameOf(assignment.user)} as a sponsor of ${assignment.eventType.nameTa} (${this.labelOf(assignment)})`,
+      summary: `Removed ${this.nameOf(assignment.party)} as a sponsor of ${assignment.eventType.nameTa} (${this.labelOf(assignment)})`,
     });
   }
 
@@ -253,14 +284,14 @@ export class SponsorsService {
   private async assertNotDuplicate(
     eventTypeId: number,
     instanceIdentifier: number | null,
-    userId: string,
+    partyId: number,
     exceptId?: number,
   ): Promise<void> {
     const existing = await this.prisma.eventTypeSponsor.findFirst({
       where: {
         eventTypeId,
         instanceIdentifier,
-        userId,
+        partyId,
         id: exceptId ? { not: exceptId } : undefined,
       },
       include: ASSIGNMENT_INCLUDE,
@@ -268,19 +299,19 @@ export class SponsorsService {
 
     if (existing) {
       throw new ConflictException(
-        `${this.nameOf(existing.user)} is already a sponsor of ${existing.eventType.nameTa} (${this.labelOf(existing)})`,
+        `${this.nameOf(existing.party)} is already a sponsor of ${existing.eventType.nameTa} (${this.labelOf(existing)})`,
       );
     }
   }
 
-  private async assertSponsorIsActive(userId: string): Promise<void> {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { isActive: true },
+  private async assertPartyIsUsable(partyId: number): Promise<void> {
+    const party = await this.prisma.party.findUnique({
+      where: { id: partyId },
+      select: { isActive: true, nameTa: true },
     });
 
-    if (!user) throw new NotFoundException(`User ${userId} was not found`);
-    if (!user.isActive) throw new BadRequestException('That account is deactivated');
+    if (!party) throw new NotFoundException(`Party ${partyId} was not found`);
+    if (!party.isActive) throw new BadRequestException(`${party.nameTa} is retired`);
   }
 
   /**
@@ -326,7 +357,7 @@ export class SponsorsService {
       eventTypeId: assignment.eventTypeId,
       instanceIdentifier: assignment.instanceIdentifier,
       customInstanceName: assignment.customInstanceName,
-      userId: assignment.userId,
+      partyId: assignment.partyId,
       createdAt: assignment.createdAt,
       eventType: {
         id: assignment.eventType.id,
@@ -337,7 +368,7 @@ export class SponsorsService {
         createdAt: assignment.eventType.createdAt,
         updatedAt: assignment.eventType.updatedAt,
       },
-      sponsor: this.toSponsor(assignment.user, canSeeContact),
+      sponsor: this.toSponsor(assignment.party, canSeeContact),
       instanceLabel: this.labelOf(assignment),
       occurrences:
         assignment.instanceIdentifier === null
@@ -355,17 +386,19 @@ export class SponsorsService {
     );
   }
 
-  private toSponsor(row: SponsorRow, canSeeContact: boolean): SponsorUserDto {
+  private toSponsor(row: SponsorRow, canSeeContact: boolean): SponsorPartyDto {
     return {
       id: row.id,
-      fullName: this.nameOf(row),
-      email: canSeeContact ? row.email : null,
+      name: row.nameTa,
+      nameEn: row.nameEn ?? '',
+      email: canSeeContact ? (row.user?.email ?? null) : null,
       phone: canSeeContact ? row.phone : null,
-      address: row.address,
+      address: row.user?.address ?? '',
+      userId: row.userId,
     };
   }
 
-  private nameOf(row: Pick<SponsorRow, 'fullName' | 'nameTa'>): string {
-    return row.fullName ?? row.nameTa;
+  private nameOf(row: Pick<SponsorRow, 'nameEn' | 'nameTa'>): string {
+    return row.nameEn ?? row.nameTa;
   }
 }
