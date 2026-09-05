@@ -114,12 +114,12 @@ export class SearchService {
     const rows = await this.prisma.event.findMany({
       where: {
         OR: [
-          { customInstanceName: contains(q) },
-          { eventType: { nameTa: contains(q) } },
-          { eventType: { nameEn: contains(q) } },
+          { slot: { customInstanceName: contains(q) } },
+          { slot: { eventType: { nameTa: contains(q) } } },
+          { slot: { eventType: { nameEn: contains(q) } } },
         ],
       },
-      include: { eventType: true },
+      include: { slot: { include: { eventType: true } } },
       take,
       orderBy: { scheduledDate: 'desc' },
     });
@@ -127,8 +127,8 @@ export class SearchService {
     return rows.map((row) => ({
       id: String(row.id),
       type: 'Event' as const,
-      title: row.customInstanceName ?? row.eventType.nameTa,
-      subtitle: `${row.scheduledDate.toISOString().slice(0, 10)} · ${row.eventType.nameEn ?? row.eventType.nameTa}`,
+      title: row.slot.customInstanceName ?? row.slot.eventType.nameTa,
+      subtitle: `${row.scheduledDate.toISOString().slice(0, 10)} · ${row.slot.eventType.nameEn ?? row.slot.eventType.nameTa}`,
       meta: null,
       ref: null,
       badge: deriveEventStatus(row.scheduledDate, row.isCompleted),
