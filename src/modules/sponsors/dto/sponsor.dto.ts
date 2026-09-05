@@ -1,10 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
+  IsEnum,
   IsInt,
   IsOptional,
   IsString,
-  IsUUID,
   Max,
   MaxLength,
   Min,
@@ -12,16 +12,30 @@ import {
 } from 'class-validator';
 
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
-import { FrequencyType } from '../../../generated/prisma/enums';
+import { FrequencyType, PartyKind } from '../../../generated/prisma/enums';
 
-export class SponsorUserDto {
-  @ApiProperty() id!: string;
-  @ApiProperty() fullName!: string;
-  @ApiProperty({ nullable: true, description: 'Null unless you hold event-sponsor:manage' })
+/**
+ * A sponsor, as the calendar needs one.
+ *
+ * A party rather than an account. Sponsorship is a dealing the temple has with
+ * somebody; whether that somebody can also sign in is a separate question, and
+ * for most of them the answer is no.
+ */
+export class SponsorPartyDto {
+  @ApiProperty() id!: number;
+  @ApiProperty({ description: 'Tamil name — the language the calendar is kept in' }) name!: string;
+  @ApiProperty() nameEn!: string;
+  @ApiProperty({
+    nullable: true,
+    description: 'From the linked sign-in. Null unless you hold event-sponsor:manage',
+  })
   email!: string | null;
   @ApiProperty({ nullable: true, description: 'Null unless you hold event-sponsor:manage' })
   phone!: string | null;
-  @ApiProperty() address!: string;
+  @ApiProperty({ description: 'From the linked sign-in; empty when there is none' })
+  address!: string;
+  @ApiProperty({ nullable: true, description: 'Set when this sponsor can also sign in' })
+  userId!: string | null;
 }
 
 export class EventTypeSummaryDto {
@@ -40,10 +54,10 @@ export class SponsorAssignmentDto {
   @ApiProperty({ nullable: true, description: 'Null when the sponsor covers the whole event type' })
   instanceIdentifier!: number | null;
   @ApiProperty({ nullable: true }) customInstanceName!: string | null;
-  @ApiProperty() userId!: string;
+  @ApiProperty() partyId!: number;
   @ApiProperty() createdAt!: Date;
   @ApiProperty({ type: EventTypeSummaryDto }) eventType!: EventTypeSummaryDto;
-  @ApiProperty({ type: SponsorUserDto }) sponsor!: SponsorUserDto;
+  @ApiProperty({ type: SponsorPartyDto }) sponsor!: SponsorPartyDto;
   @ApiProperty({ example: 'Week 24' }) instanceLabel!: string;
   @ApiProperty({ description: 'Dated occurrences this standing assignment covers this year' })
   occurrences!: number;
@@ -74,16 +88,20 @@ export class CreateSponsorDto {
   @MaxLength(160)
   customInstanceName?: string;
 
-  @ApiProperty()
-  @IsUUID()
-  userId!: string;
+  @ApiProperty({ description: 'The party sponsoring the slot' })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  partyId!: number;
 }
 
 export class UpdateSponsorDto {
   @ApiPropertyOptional()
   @IsOptional()
-  @IsUUID()
-  userId?: string;
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  partyId?: number;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -144,4 +162,13 @@ export class QuerySponsorsDto {
   year?: number;
 }
 
-export class QueryDirectoryDto extends PaginationQueryDto {}
+export class QueryDirectoryDto extends PaginationQueryDto {
+  @ApiPropertyOptional({
+    enum: PartyKind,
+    description:
+      'Narrows the directory to parties holding this role. Omit to search every party — a florist asked to sponsor a pooja for the first time is found this way, and gains the role by being registered.',
+  })
+  @IsOptional()
+  @IsEnum(PartyKind)
+  kind?: PartyKind;
+}
