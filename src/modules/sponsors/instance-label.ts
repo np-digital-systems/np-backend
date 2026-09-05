@@ -2,8 +2,12 @@ import { FrequencyType } from '../../generated/prisma/enums';
 
 const LUNAR_OCCURRENCE: Record<number, string> = { 1: 'Valarpirai', 2: 'Theipirai' };
 
-/** What a sponsor with no instance covers — every slot of the type. */
-export const ANY_INSTANCE_LABEL = 'All instances';
+/**
+ * What a sponsor with no instance is: registered against the type, waiting for
+ * an occurrence. Not "every slot" — the temple takes the name first and settles
+ * which Friday it is later, and most of the register sits in this state.
+ */
+export const ANY_INSTANCE_LABEL = 'Not yet assigned';
 
 export function describeInstance(
   frequencyType: FrequencyType,
