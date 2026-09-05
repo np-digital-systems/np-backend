@@ -4,8 +4,11 @@ import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
+import { describeInstance } from '../sponsors/instance-label';
 import {
   CreateEventTypeDto,
+  EventSlotDto,
+  UpdateEventSlotDto,
   EventTypeRecordDto,
   QueryEventTypesDto,
   UpdateEventTypeDto,
@@ -69,6 +72,74 @@ export class EventTypesService {
     ]);
 
     return this.toRecord(type, sponsorSlots, scheduledCount);
+  }
+
+  /**
+   * A type's slots — the fixed structure of its year.
+   *
+   * The one screen where the shape of a pooja can be set out before any date
+   * exists: name the slot, see who takes it, see whether it has been scheduled.
+   */
+  async slots(eventTypeId: number, year = new Date().getFullYear()): Promise<EventSlotDto[]> {
+    const type = await this.prisma.eventType.findUnique({ where: { id: eventTypeId } });
+
+    if (!type) throw new NotFoundException(`Event type ${eventTypeId} was not found`);
+
+    const slots = await this.prisma.eventSlot.findMany({
+      where: { eventTypeId },
+      orderBy: { instanceIdentifier: 'asc' },
+      include: {
+        sponsors: { include: { party: { select: { nameTa: true } } } },
+        events: { where: this.withinYear(year), select: { id: true } },
+      },
+    });
+
+    return slots.map((slot) => ({
+      id: slot.id,
+      instanceIdentifier: slot.instanceIdentifier,
+      customInstanceName: slot.customInstanceName,
+      instanceLabel: describeInstance(
+        type.frequencyType,
+        slot.instanceIdentifier,
+        slot.customInstanceName,
+      ),
+      isActive: slot.isActive,
+      sponsorNames: slot.sponsors.map((row) => row.party.nameTa),
+      scheduledCount: slot.events.length,
+    }));
+  }
+
+  async updateSlot(
+    slotId: number,
+    dto: UpdateEventSlotDto,
+    context: ActorContext,
+  ): Promise<EventSlotDto> {
+    const before = await this.prisma.eventSlot.findUnique({
+      where: { id: slotId },
+      include: { eventType: true },
+    });
+
+    if (!before) throw new NotFoundException(`Slot ${slotId} was not found`);
+
+    const slot = await this.prisma.eventSlot.update({
+      where: { id: slotId },
+      data: {
+        customInstanceName:
+          dto.customInstanceName === undefined ? undefined : dto.customInstanceName || null,
+        isActive: dto.isActive,
+      },
+    });
+
+    await this.audit.record(context, {
+      action: 'update',
+      entity: 'event_slot',
+      entityRef: String(slotId),
+      summary: `Renamed ${before.eventType.nameTa} instance ${slot.instanceIdentifier} to ${slot.customInstanceName ?? '(no name)'}`,
+    });
+
+    const [refreshed] = await this.slots(before.eventTypeId);
+
+    return (await this.slots(before.eventTypeId)).find((row) => row.id === slotId) ?? refreshed;
   }
 
   async create(dto: CreateEventTypeDto, context: ActorContext): Promise<EventTypeRecordDto> {
