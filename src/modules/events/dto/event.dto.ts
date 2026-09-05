@@ -38,6 +38,8 @@ export class EventRecordDto {
 }
 
 export class ScheduleSlotDto {
+  @ApiProperty({ description: 'The slot row every sponsor and occurrence points at' })
+  slotId!: number;
   @ApiProperty() instanceIdentifier!: number;
   @ApiProperty() instanceLabel!: string;
   @ApiProperty({ nullable: true }) customInstanceName!: string | null;
@@ -48,6 +50,12 @@ export class ScheduleSlotDto {
       'The sponsor offered by default — one registered against this instance, else one registered against the whole event type',
   })
   defaultSponsor!: SponsorPartyDto | null;
+  @ApiProperty({
+    type: SponsorPartyDto,
+    isArray: true,
+    description: 'Everyone who takes this slot — the shortlist a year is scheduled from',
+  })
+  sponsors!: SponsorPartyDto[];
   @ApiProperty({ description: 'How many registered sponsors stand for this slot' })
   sponsorCount!: number;
   @ApiProperty({
