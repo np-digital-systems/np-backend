@@ -147,7 +147,6 @@ export class SponsorsService {
 
     await this.assertPartyIsUsable(dto.partyId);
     await this.assertNotDuplicate(dto.eventTypeId, slotId, dto.partyId);
-    await this.nameSlot(slotId, dto.customInstanceName);
 
     const created = await this.prisma.$transaction(async (tx) => {
       // Sponsoring something is what makes a party a sponsor. Granting the role
@@ -197,7 +196,6 @@ export class SponsorsService {
     const slotId = await this.resolveSlotId(eventTypeId, instanceIdentifier);
 
     await this.assertNotDuplicate(eventTypeId, slotId, partyId, id);
-    await this.nameSlot(slotId, dto.customInstanceName);
 
     const updated = await this.prisma.$transaction(async (tx) => {
       await tx.partyRole.createMany({
@@ -281,20 +279,6 @@ export class SponsorsService {
     }
 
     return slot.id;
-  }
-
-  /*
-   * The slot's name is fixed for every year, so registering a sponsor against
-   * it may set that name — but it is written to the slot, which is the one
-   * place that holds it, rather than kept beside the sponsorship.
-   */
-  private async nameSlot(slotId: number | null, name?: string | null): Promise<void> {
-    if (slotId === null || name === undefined) return;
-
-    await this.prisma.eventSlot.update({
-      where: { id: slotId },
-      data: { customInstanceName: name || null },
-    });
   }
 
   /**
