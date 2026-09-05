@@ -1,3 +1,4 @@
+
 -- A sponsorship always names a slot.
 --
 -- "All instances" was a way of saying "all of these" that nothing could act
@@ -7,8 +8,8 @@
 
 -- Say it plainly rather than let a row vanish: a type-wide sponsorship becomes
 -- one row per slot, which is what it always meant.
-INSERT INTO "event_type_sponsors" ("slot_id", "party_id", "created_at")
-SELECT sl."id", s."party_id", s."created_at"
+INSERT INTO "event_type_sponsors" ("slot_id", "party_id", "created_at", "event_type_id")
+SELECT sl."id", s."party_id", s."created_at", sl."event_type_id"
 FROM "event_type_sponsors" s
 JOIN "event_slots" sl ON sl."event_type_id" = s."event_type_id"
 WHERE s."slot_id" IS NULL
@@ -28,3 +29,4 @@ ALTER TABLE "event_type_sponsors" DROP COLUMN "event_type_id";
 
 CREATE UNIQUE INDEX "one_sponsor_per_slot"
   ON "event_type_sponsors"("slot_id", "party_id");
+
