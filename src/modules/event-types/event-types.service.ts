@@ -38,15 +38,20 @@ export class EventTypesService {
 
     const [sponsors, scheduled] = await Promise.all([
       this.prisma.eventTypeSponsor.groupBy({ by: ['eventTypeId'], _count: { _all: true } }),
-      this.prisma.event.groupBy({
-        by: ['eventTypeId'],
+      // Events reach their type through a slot, so they are counted by slot
+      // and rolled up rather than grouped on a column that no longer exists.
+      this.prisma.event.findMany({
         where: this.withinYear(year),
-        _count: { _all: true },
+        select: { slot: { select: { eventTypeId: true } } },
       }),
     ]);
 
     const sponsorCount = new Map(sponsors.map((row) => [row.eventTypeId, row._count._all]));
-    const eventCount = new Map(scheduled.map((row) => [row.eventTypeId, row._count._all]));
+    const eventCount = new Map<number, number>();
+
+    for (const row of scheduled) {
+      eventCount.set(row.slot.eventTypeId, (eventCount.get(row.slot.eventTypeId) ?? 0) + 1);
+    }
 
     return types.map((type) =>
       this.toRecord(type, sponsorCount.get(type.id) ?? 0, eventCount.get(type.id) ?? 0),
@@ -60,7 +65,7 @@ export class EventTypesService {
 
     const [sponsorSlots, scheduledCount] = await Promise.all([
       this.prisma.eventTypeSponsor.count({ where: { eventTypeId: id } }),
-      this.prisma.event.count({ where: { eventTypeId: id, ...this.withinYear(year) } }),
+      this.prisma.event.count({ where: { slot: { eventTypeId: id }, ...this.withinYear(year) } }),
     ]);
 
     return this.toRecord(type, sponsorSlots, scheduledCount);
@@ -69,6 +74,11 @@ export class EventTypesService {
   async create(dto: CreateEventTypeDto, context: ActorContext): Promise<EventTypeRecordDto> {
     await this.assertActivityIsUsable(dto.activityId ?? null);
 
+    /*
+     * A type's slots come into being with it. They are the structure of the
+     * temple year — the rows sponsors attach to and occurrences are dated
+     * against — so a type without them could never be scheduled.
+     */
     const type = await this.prisma.eventType.create({
       data: {
         nameTa: dto.nameTa,
@@ -76,6 +86,11 @@ export class EventTypesService {
         frequencyType: dto.frequencyType,
         noOfInstances: dto.noOfInstances,
         activityId: dto.activityId ?? null,
+        slots: {
+          create: Array.from({ length: dto.noOfInstances }, (_, index) => ({
+            instanceIdentifier: index + 1,
+          })),
+        },
       },
     });
 
@@ -117,6 +132,13 @@ export class EventTypesService {
       },
     });
 
+    // The slots follow the count: a longer year gains them, a shorter one
+    // loses the surplus — and only ever after assertNoSlotsBeyond has proved
+    // nothing is standing on the ones about to go.
+    if (dto.noOfInstances !== undefined && dto.noOfInstances !== before.noOfInstances) {
+      await this.syncSlots(id, dto.noOfInstances);
+    }
+
     await this.audit.record(context, {
       action: 'update',
       entity: 'event_type',
@@ -134,9 +156,9 @@ export class EventTypesService {
     if (!type) throw new NotFoundException(`Event type ${id} was not found`);
 
     const [events, vouchers] = await Promise.all([
-      this.prisma.event.count({ where: { eventTypeId: id } }),
+      this.prisma.event.count({ where: { slot: { eventTypeId: id } } }),
       // A voucher reaches a pooja type through the occurrence on its lines.
-      this.prisma.voucherLine.count({ where: { event: { eventTypeId: id } } }),
+      this.prisma.voucherLine.count({ where: { event: { slot: { eventTypeId: id } } } }),
     ]);
 
     if (events > 0 || vouchers > 0) {
@@ -172,14 +194,38 @@ export class EventTypesService {
     }
   }
 
+  private async syncSlots(eventTypeId: number, noOfInstances: number): Promise<void> {
+    await this.prisma.eventSlot.deleteMany({
+      where: { eventTypeId, instanceIdentifier: { gt: noOfInstances } },
+    });
+
+    const existing = await this.prisma.eventSlot.findMany({
+      where: { eventTypeId },
+      select: { instanceIdentifier: true },
+    });
+
+    const held = new Set(existing.map((slot) => slot.instanceIdentifier));
+
+    const missing = Array.from({ length: noOfInstances }, (_, index) => index + 1).filter(
+      (instanceIdentifier) => !held.has(instanceIdentifier),
+    );
+
+    if (missing.length === 0) return;
+
+    await this.prisma.eventSlot.createMany({
+      data: missing.map((instanceIdentifier) => ({ eventTypeId, instanceIdentifier })),
+      skipDuplicates: true,
+    });
+  }
+
   /** Shrinking a year would orphan sponsors and events sitting on the lost slots. */
   private async assertNoSlotsBeyond(id: number, noOfInstances: number): Promise<void> {
     const [sponsors, events] = await Promise.all([
       this.prisma.eventTypeSponsor.count({
-        where: { eventTypeId: id, instanceIdentifier: { gt: noOfInstances } },
+        where: { eventTypeId: id, slot: { instanceIdentifier: { gt: noOfInstances } } },
       }),
       this.prisma.event.count({
-        where: { eventTypeId: id, instanceIdentifier: { gt: noOfInstances } },
+        where: { slot: { eventTypeId: id, instanceIdentifier: { gt: noOfInstances } } },
       }),
     ]);
 
