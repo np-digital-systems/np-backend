@@ -24,7 +24,7 @@ import {
   QueryDirectoryDto,
   QuerySponsorsDto,
   SponsorAssignmentDto,
-  SponsorUserDto,
+  SponsorPartyDto,
   UpdateSponsorDto,
 } from './dto/sponsor.dto';
 import { SponsorsService } from './sponsors.service';
@@ -60,7 +60,7 @@ export class SponsorsController {
   async directory(
     @Query() query: QueryDirectoryDto,
     @CurrentUser() user: AuthenticatedUser,
-  ): Promise<PageDto<SponsorUserDto>> {
+  ): Promise<PageDto<SponsorPartyDto>> {
     return this.sponsors.directory(query, await this.canSeeContact(user));
   }
 
