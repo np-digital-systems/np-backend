@@ -115,7 +115,6 @@ export class AccountsService {
         parentId: dto.parentId,
         isPostable: dto.isPostable ?? true,
         openingBalance: dto.openingBalance ?? 0,
-        defaultPartyId: dto.defaultPartyId ?? null,
       },
       include: { parent: true },
     });
@@ -158,7 +157,6 @@ export class AccountsService {
         isPostable: dto.isPostable,
         isActive: dto.isActive,
         openingBalance: dto.openingBalance,
-        defaultPartyId: dto.defaultPartyId,
       },
       include: { parent: true },
     });
@@ -255,7 +253,6 @@ export class AccountsService {
       isPostable: account.isPostable,
       isActive: account.isActive,
       openingBalance: opening,
-      defaultPartyId: account.defaultPartyId,
       createdAt: account.createdAt,
       parent: parent ? toAccountRef(parent) : null,
       entryCount: totals.count,

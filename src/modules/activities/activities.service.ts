@@ -63,7 +63,11 @@ export class ActivitiesService {
   }
 
   async create(dto: CreateActivityDto, context: ActorContext): Promise<ActivityRecordDto> {
-    await this.assertFundIsUsable(dto.defaultFundId ?? null);
+    await this.assertCodingIsUsable(
+      dto.defaultFundId ?? null,
+      dto.defaultProjectId ?? null,
+      dto.defaultPartyId ?? null,
+    );
 
     const activity = await this.prisma.activity.create({
       data: {
@@ -71,6 +75,8 @@ export class ActivitiesService {
         nameEn: dto.nameEn,
         kind: dto.kind,
         defaultFundId: dto.defaultFundId ?? null,
+        defaultProjectId: dto.defaultProjectId ?? null,
+        defaultPartyId: dto.defaultPartyId ?? null,
       },
     });
 
@@ -93,9 +99,19 @@ export class ActivitiesService {
 
     if (!before) throw new NotFoundException(`Activity ${id} was not found`);
 
-    if (dto.defaultFundId !== undefined) {
-      await this.assertFundIsUsable(dto.defaultFundId ?? null);
-    }
+    /*
+     * Checked against what the row will hold, not what the request carried:
+     * moving the fund alone still has to be checked against the project already
+     * on the activity, or the pair could be left pointing at different funds.
+     */
+    const defaultFundId =
+      dto.defaultFundId === undefined ? before.defaultFundId : (dto.defaultFundId ?? null);
+    const defaultProjectId =
+      dto.defaultProjectId === undefined ? before.defaultProjectId : (dto.defaultProjectId ?? null);
+    const defaultPartyId =
+      dto.defaultPartyId === undefined ? before.defaultPartyId : (dto.defaultPartyId ?? null);
+
+    await this.assertCodingIsUsable(defaultFundId, defaultProjectId, defaultPartyId);
 
     if (dto.isActive === false) await this.assertNothingDependsOnIt(id, before.nameTa);
 
@@ -105,7 +121,9 @@ export class ActivitiesService {
         nameTa: dto.nameTa,
         nameEn: dto.nameEn,
         kind: dto.kind,
-        defaultFundId: dto.defaultFundId,
+        defaultFundId,
+        defaultProjectId,
+        defaultPartyId,
         isActive: dto.isActive,
       },
     });
@@ -141,13 +159,46 @@ export class ActivitiesService {
     }
   }
 
-  private async assertFundIsUsable(fundId: number | null): Promise<void> {
-    if (fundId === null) return;
+  /**
+   * The three defaults have to make sense together.
+   *
+   * A project belongs to exactly one fund, so an activity offering both must
+   * offer a pair that agree — otherwise picking the activity would fill a
+   * voucher with a project the fund does not carry, and the clerk would have
+   * to notice before the API refused it.
+   */
+  private async assertCodingIsUsable(
+    fundId: number | null,
+    projectId: number | null,
+    partyId: number | null,
+  ): Promise<void> {
+    if (fundId !== null) {
+      const fund = await this.prisma.fund.findUnique({ where: { id: fundId } });
 
-    const fund = await this.prisma.fund.findUnique({ where: { id: fundId } });
+      if (!fund) throw new NotFoundException(`Fund ${fundId} was not found`);
+      if (!fund.isActive) throw new ConflictException(`Fund ${fund.nameTa} is closed`);
+    }
 
-    if (!fund) throw new NotFoundException(`Fund ${fundId} was not found`);
-    if (!fund.isActive) throw new ConflictException(`Fund ${fund.nameTa} is closed`);
+    if (projectId !== null) {
+      if (fundId === null) {
+        throw new ConflictException('A default project needs the fund it is carried in');
+      }
+
+      const project = await this.prisma.project.findUnique({ where: { id: projectId } });
+
+      if (!project) throw new NotFoundException(`Project ${projectId} was not found`);
+
+      if (project.fundId !== fundId) {
+        throw new ConflictException(`${project.nameTa} is not carried in the fund chosen above`);
+      }
+    }
+
+    if (partyId !== null) {
+      const party = await this.prisma.party.findUnique({ where: { id: partyId } });
+
+      if (!party) throw new NotFoundException(`Party ${partyId} was not found`);
+      if (!party.isActive) throw new ConflictException(`${party.nameTa} is no longer active`);
+    }
   }
 
   private toRecord(
@@ -171,6 +222,8 @@ export class ActivitiesService {
       nameEn: activity.nameEn ?? '',
       kind: activity.kind,
       defaultFundId: activity.defaultFundId,
+      defaultProjectId: activity.defaultProjectId,
+      defaultPartyId: activity.defaultPartyId,
       isActive: activity.isActive,
       entryCount,
       income: round(earned),

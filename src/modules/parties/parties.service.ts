@@ -159,15 +159,15 @@ export class PartiesService {
 
   /*
    * Deactivating hides a party from the pickers; it never touches the entries
-   * that name it. What it must not do is leave an expense head pointing at
-   * somebody who can no longer be chosen.
+   * that name it. What it must not do is leave an activity offering somebody
+   * who can no longer be chosen.
    */
   private async assertNothingDependsOnIt(id: number, nameTa: string): Promise<void> {
-    const heads = await this.prisma.account.count({ where: { defaultPartyId: id } });
+    const activities = await this.prisma.activity.count({ where: { defaultPartyId: id } });
 
-    if (heads > 0) {
+    if (activities > 0) {
       throw new ConflictException(
-        `${nameTa} is still the default on ${heads} ledger head(s); clear those first`,
+        `${nameTa} is still the default party on ${activities} activity(ies); clear those first`,
       );
     }
   }

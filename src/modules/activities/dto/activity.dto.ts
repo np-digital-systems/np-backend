@@ -11,6 +11,10 @@ export class ActivityDto {
   @ApiProperty({ enum: ActivityKind }) kind!: ActivityKind;
   @ApiProperty({ nullable: true, description: 'Fund offered when this activity is chosen' })
   defaultFundId!: number | null;
+  @ApiProperty({ nullable: true, description: 'Project offered with it, where the work has one' })
+  defaultProjectId!: number | null;
+  @ApiProperty({ nullable: true, description: 'Who this activity is usually with' })
+  defaultPartyId!: number | null;
   @ApiProperty() isActive!: boolean;
 }
 
@@ -45,6 +49,20 @@ export class CreateActivityDto {
   @IsInt()
   @Min(1)
   defaultFundId?: number | null;
+
+  @ApiPropertyOptional({ description: 'Must belong to the fund above' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  defaultProjectId?: number | null;
+
+  @ApiPropertyOptional({ description: 'The kurukkal on his honorarium, the chef on hers' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  defaultPartyId?: number | null;
 }
 
 export class UpdateActivityDto extends PartialType(CreateActivityDto) {
