@@ -268,18 +268,6 @@ export class EventsService {
 
     if (sponsorPartyId) await this.assertSponsorIsUsable(sponsorPartyId);
 
-    /*
-     * Naming the day names its slot. The name belongs to the slot and is fixed
-     * for every year, so writing it here reaches through rather than keeping a
-     * second copy on the occurrence.
-     */
-    if (dto.customInstanceName !== undefined) {
-      await this.prisma.eventSlot.update({
-        where: { id: slot.id },
-        data: { customInstanceName: dto.customInstanceName || null },
-      });
-    }
-
     const event = await this.prisma.event.create({
       data: {
         slotId: slot.id,
@@ -317,14 +305,6 @@ export class EventsService {
     }
 
     if (dto.sponsorPartyId) await this.assertSponsorIsUsable(dto.sponsorPartyId);
-
-    // As on create: naming the day names the slot it belongs to.
-    if (dto.customInstanceName !== undefined) {
-      await this.prisma.eventSlot.update({
-        where: { id: before.slotId },
-        data: { customInstanceName: dto.customInstanceName || null },
-      });
-    }
 
     const event = await this.prisma.event.update({
       where: { id },
