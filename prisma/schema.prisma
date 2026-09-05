@@ -707,8 +707,8 @@ model EventType {
 
   activity Activity? @relation(fields: [activityId], references: [id])
 
+  slots    EventSlot[]
   sponsors EventTypeSponsor[]
-  events   Event[]
 
   @@index([activityId], map: "event_types_activity")
   @@map("event_types")
@@ -717,30 +717,72 @@ model EventType {
 /// A sponsor is a person registered against an event type. The instance is
 /// optional: leaving it null means they sponsor the type as a whole and are
 /// offered for any of its instances, rather than one particular slot.
+/*
+ * One slot of a recurring observance — Week 12, or the மார்கழி occurrence.
+ *
+ * The structure of the temple year, fixed once and left alone. Sponsors attach
+ * to a slot and a slot is dated afresh every year, so this is the row both of
+ * those point at: the name of a slot is neither a property of whoever takes it
+ * nor of the day it happens to land on, and holding it here is what stops the
+ * same name being written on two tables with a rule deciding which wins.
+ */
+model EventSlot {
+  id                 Int     @id @default(autoincrement())
+  eventTypeId        Int     @map("event_type_id")
+  instanceIdentifier Int     @map("instance_identifier") @db.SmallInt
+  // The temple's own name for the slot — "மார்கழி மாதம்", "சப்பரம்".
+  customInstanceName String? @map("custom_instance_name")
+  isActive           Boolean @default(true) @map("is_active")
+
+  eventType EventType          @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
+  sponsors  EventTypeSponsor[]
+  events    Event[]
+
+  // The natural key, beside the surrogate id the other tables reference.
+  @@unique([eventTypeId, instanceIdentifier], map: "one_slot_per_instance")
+  @@map("event_slots")
+}
+
+/*
+ * Who may take a slot — the arrangement, with no year attached.
+ *
+ * A shortlist, not an order: several devotees share one slot between them, and
+ * which of them takes a given year is decided when that year is scheduled and
+ * recorded on the occurrence. Storing a turn order here would be a second
+ * opinion that drifts the first time a year is skipped or swapped.
+ *
+ * `slotId` is null for a party who takes any slot of the type.
+ */
 model EventTypeSponsor {
-  id                 Int      @id @default(autoincrement())
-  eventTypeId        Int      @map("event_type_id")
-  instanceIdentifier Int?     @map("instance_identifier") @db.SmallInt
-  customInstanceName String?  @map("custom_instance_name")
-  partyId            Int      @map("party_id")
-  createdAt          DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id          Int      @id @default(autoincrement())
+  eventTypeId Int      @map("event_type_id")
+  slotId      Int?     @map("slot_id")
+  partyId     Int      @map("party_id")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  eventType EventType @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
-  party     Party     @relation(fields: [partyId], references: [id])
+  eventType EventType  @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
+  slot      EventSlot? @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  party     Party      @relation(fields: [partyId], references: [id])
 
-  // Postgres treats NULLs as distinct, so type-wide rows (null instance) are
+  // Postgres treats NULLs as distinct, so type-wide rows (null slot) are
   // deduplicated in the service instead — see SponsorsService.assertNotDuplicate.
-  @@unique([eventTypeId, instanceIdentifier, partyId], map: "one_sponsor_per_slot")
-  @@index([eventTypeId, instanceIdentifier], map: "sponsors_by_slot")
+  @@unique([eventTypeId, slotId, partyId], map: "one_sponsor_per_slot")
+  @@index([slotId], map: "sponsors_by_slot")
   @@index([partyId], map: "sponsors_by_party")
   @@map("event_type_sponsors")
 }
 
+/*
+ * One dated occurrence of one slot — the part redrawn every year.
+ *
+ * Everything fixed lives on the slot; what changes each year is the date, the
+ * time, and which of the slot's sponsors took it. That last one is why the
+ * sponsor sits here and not on the slot: the slot knows all three names, only
+ * the year knows which of them paid.
+ */
 model Event {
   id                 Int       @id @default(autoincrement())
-  eventTypeId        Int       @map("event_type_id")
-  instanceIdentifier Int       @map("instance_identifier") @db.SmallInt
-  customInstanceName String?   @map("custom_instance_name")
+  slotId             Int       @map("slot_id")
   scheduledDate      DateTime  @map("scheduled_date") @db.Date
   startTime          DateTime  @map("start_time") @db.Time(6)
   endTime            DateTime? @map("end_time") @db.Time(6)
@@ -750,12 +792,13 @@ model Event {
   createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  eventType    EventType     @relation(fields: [eventTypeId], references: [id])
+  slot         EventSlot     @relation(fields: [slotId], references: [id])
   sponsor      Party?        @relation(fields: [sponsorPartyId], references: [id])
   voucherLines VoucherLine[]
 
+  // The same slot on the same day twice is a duplicate, not a second pooja.
+  @@unique([slotId, scheduledDate], map: "one_occurrence_per_slot_day")
   @@index([scheduledDate], map: "events_calendar")
-  @@index([eventTypeId, instanceIdentifier], map: "events_by_slot")
   @@index([sponsorPartyId], map: "events_sponsor")
   @@map("events")
 }
