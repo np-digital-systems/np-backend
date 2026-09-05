@@ -707,7 +707,8 @@ model EventType {
 
   activity Activity? @relation(fields: [activityId], references: [id])
 
-  slots EventSlot[]
+  slots    EventSlot[]
+  sponsors EventTypeSponsor[]
 
   @@index([activityId], map: "event_types_activity")
   @@map("event_types")
@@ -750,22 +751,28 @@ model EventSlot {
  * recorded on the occurrence. Storing a turn order here would be a second
  * opinion that drifts the first time a year is skipped or swapped.
  *
- * Always a slot. Every type has them, so "all instances" was a way of saying
- * "all of these" that nothing could act on — the schedule had to fan it back
- * out to the slots anyway, and it left a nullable link that only ever meant
- * the same thing as a row per slot.
+ * The slot is optional, and a null one is not "every slot". It is a registered
+ * sponsor who has not been given an occurrence yet — the temple takes the name
+ * first and settles which Friday it is later, so the pool of people waiting to
+ * be placed is most of this table. The type is therefore what a sponsorship
+ * always names; the slot is what it is eventually assigned.
  */
 model EventTypeSponsor {
-  id        Int      @id @default(autoincrement())
-  slotId    Int      @map("slot_id")
-  partyId   Int      @map("party_id")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id          Int      @id @default(autoincrement())
+  eventTypeId Int      @map("event_type_id")
+  slotId      Int?     @map("slot_id")
+  partyId     Int      @map("party_id")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  slot  EventSlot @relation(fields: [slotId], references: [id], onDelete: Cascade)
-  party Party     @relation(fields: [partyId], references: [id])
+  eventType EventType  @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
+  slot      EventSlot? @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  party     Party      @relation(fields: [partyId], references: [id])
 
-  @@unique([slotId, partyId], map: "one_sponsor_per_slot")
+  // Postgres treats each null slot as distinct, so this cannot police the
+  // unassigned pool on its own; SponsorsService checks that case as well.
+  @@unique([eventTypeId, slotId, partyId], map: "one_sponsor_per_slot")
   @@index([partyId], map: "sponsors_by_party")
+  @@index([slotId], map: "sponsors_by_slot")
   @@map("event_type_sponsors")
 }
 

@@ -42,9 +42,12 @@ export class EventTypeSummaryDto {
 export class SponsorAssignmentDto {
   @ApiProperty() id!: number;
   @ApiProperty() eventTypeId!: number;
-  @ApiProperty({ nullable: true, description: 'The slot taken, or null for the whole type' })
+  @ApiProperty({ nullable: true, description: 'The slot taken, or null while unplaced' })
   slotId!: number | null;
-  @ApiProperty({ nullable: true, description: 'Null when the sponsor covers the whole event type' })
+  @ApiProperty({
+    nullable: true,
+    description: 'Null when the sponsor has not been given an occurrence yet',
+  })
   instanceIdentifier!: number | null;
   @ApiProperty({ nullable: true }) customInstanceName!: string | null;
   @ApiProperty() partyId!: number;
@@ -63,11 +66,20 @@ export class CreateSponsorDto {
   @Min(1)
   eventTypeId!: number;
 
-  @ApiProperty({ description: 'Which slot of the type this sponsorship is for' })
+  @ApiPropertyOptional({
+    minimum: 1,
+    maximum: 366,
+    nullable: true,
+    description:
+      'Which slot of the type this sponsorship is for. Omit or send null to register the sponsor against the type without placing them yet.',
+  })
+  @IsOptional()
+  @ValidateIf((_, value) => value !== null)
   @Type(() => Number)
   @IsInt()
   @Min(1)
-  instanceIdentifier!: number;
+  @Max(366)
+  instanceIdentifier?: number | null;
 
   @ApiProperty({ description: 'The party sponsoring the slot' })
   @Type(() => Number)
@@ -95,7 +107,7 @@ export class UpdateSponsorDto {
     minimum: 1,
     maximum: 366,
     nullable: true,
-    description: 'Send null to widen the sponsor back out to the whole event type',
+    description: 'Send null to return the sponsor to the pool waiting for a slot',
   })
   @IsOptional()
   @ValidateIf((_, value) => value !== null)
