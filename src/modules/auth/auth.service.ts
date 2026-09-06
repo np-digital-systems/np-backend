@@ -60,9 +60,13 @@ export class AuthService {
 
     if (!account) throw new UnauthorizedException('This account no longer exists');
 
-    const { permissions: _ignored, ...identity } = this.toAuthUser(account, []);
-
-    return identity;
+    return {
+      id: account.id,
+      nameTa: account.party.nameTa,
+      nameEn: account.party.nameEn,
+      email: account.email,
+      role: account.role,
+    };
   }
 
   async login(dto: LoginDto, context: RequestContext): Promise<AuthTokensDto> {
