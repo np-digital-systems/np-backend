@@ -35,7 +35,7 @@ CREATE TRIGGER "parties_set_updated_at"
 
 -- ── sponsors ────────────────────────────────────────────────────────────────
 
-CREATE SEQUENCE "sponsor_no_seq";
+CREATE SEQUENCE IF NOT EXISTS "sponsor_no_seq";
 
 CREATE OR REPLACE FUNCTION allocate_sponsor_no() RETURNS trigger AS $$
 BEGIN
