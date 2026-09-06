@@ -25,6 +25,12 @@ export class AccountRefDto {
 export class AccountDto extends AccountRefDto {
   @ApiProperty({ nullable: true }) parentId!: number | null;
   @ApiProperty() isPostable!: boolean;
+  @ApiProperty({
+    nullable: true,
+    description:
+      'Offered when this head is chosen. Only for heads dealing with exactly one party — electricity, water, rates. A default, not a rule',
+  })
+  defaultPartyId!: number | null;
   @ApiProperty() isActive!: boolean;
   @ApiProperty() openingBalance!: number;
   @ApiProperty() createdAt!: Date;
@@ -69,6 +75,13 @@ export class CreateAccountDto {
   @IsOptional()
   @IsBoolean()
   isPostable?: boolean;
+
+  @ApiPropertyOptional({ description: 'Only for a head that deals with one party' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  defaultPartyId?: number | null;
 
   @ApiPropertyOptional({ description: 'Must be zero for income and expense heads' })
   @IsOptional()
