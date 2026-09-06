@@ -4,13 +4,13 @@ import { JwtService } from '@nestjs/jwt';
 import { createHash, randomBytes } from 'node:crypto';
 
 import { Env } from '../../config/env.schema';
-import { UserRole } from '../../generated/prisma/enums';
+import { AccountRole } from '../../generated/prisma/enums';
 import { ACCESS_TOKEN_AUDIENCE, ACCESS_TOKEN_ISSUER } from './auth.constants';
 
 export interface AccessTokenPayload {
   sub: string;
   name: string;
-  role: UserRole;
+  role: AccountRole;
   sid: string;
 }
 
