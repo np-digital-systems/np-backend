@@ -1,34 +1,44 @@
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
-  ArrayNotEmpty,
   ArrayUnique,
   IsArray,
   IsBoolean,
+  IsEmail,
   IsEnum,
   IsInt,
   IsOptional,
   IsString,
-  IsUUID,
   MaxLength,
 } from 'class-validator';
 
-import { PartyKind } from '../../../generated/prisma/enums';
+import { PartyKind, PartyType } from '../../../generated/prisma/enums';
+
+const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value);
+const emptyToNull = ({ value }: { value: unknown }) =>
+  typeof value === 'string' && value.trim() === '' ? null : trim({ value });
 
 export class PartyDto {
   @ApiProperty() id!: number;
+  @ApiProperty({ enum: PartyType }) type!: PartyType;
   @ApiProperty({ description: 'Tamil name — the language the books are kept in' }) name!: string;
   @ApiProperty() nameEn!: string;
   @ApiProperty({
     enum: PartyKind,
     isArray: true,
-    description:
-      'Every role this party holds. A florist who also sponsors a pooja holds both; the roles group the list and never limit what the party may appear on.',
+    description: 'Every role this party holds. Sponsorship is not among them: a sponsor profile is',
   })
   roles!: PartyKind[];
+  @ApiProperty({ description: 'Whether a sponsor profile exists for this party' })
+  isSponsor!: boolean;
   @ApiProperty({ nullable: true, description: 'Set when this party also signs in' })
-  userId!: string | null;
+  accountId!: string | null;
   @ApiProperty({ nullable: true }) phone!: string | null;
+  @ApiProperty({ nullable: true }) email!: string | null;
+  @ApiProperty({ nullable: true }) address!: string | null;
+  @ApiProperty({ nullable: true, description: 'Their account number with us, or ours with them' })
+  referenceNo!: string | null;
+  @ApiProperty({ nullable: true }) notes!: string | null;
   @ApiProperty() isActive!: boolean;
 }
 
@@ -40,40 +50,69 @@ export class PartyRecordDto extends PartyDto {
 }
 
 export class CreatePartyDto {
+  @ApiPropertyOptional({ enum: PartyType, default: PartyType.person })
+  @IsOptional()
+  @IsEnum(PartyType)
+  type?: PartyType;
+
   @ApiProperty({ example: 'திரு. க. சபேசன்' })
+  @Transform(trim)
   @IsString()
   @MaxLength(160)
   nameTa!: string;
 
   @ApiPropertyOptional({ example: 'K. Sabesan' })
   @IsOptional()
+  @Transform(emptyToNull)
   @IsString()
   @MaxLength(160)
-  nameEn?: string;
+  nameEn?: string | null;
 
   @ApiPropertyOptional({
     enum: PartyKind,
     isArray: true,
-    default: [PartyKind.devotee],
-    description: 'Defaults to devotee when omitted',
+    description: 'May be empty — the electricity board is a party with no role',
   })
   @IsOptional()
   @IsArray()
-  @ArrayNotEmpty()
   @ArrayUnique()
   @IsEnum(PartyKind, { each: true })
   roles?: PartyKind[];
 
-  @ApiPropertyOptional({ description: 'Links this party to the person who signs in' })
-  @IsOptional()
-  @IsUUID()
-  userId?: string | null;
-
   @ApiPropertyOptional()
   @IsOptional()
+  @Transform(emptyToNull)
   @IsString()
   @MaxLength(32)
   phone?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(emptyToNull)
+  @IsEmail()
+  @MaxLength(160)
+  email?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(emptyToNull)
+  @IsString()
+  @MaxLength(400)
+  address?: string | null;
+
+  @ApiPropertyOptional({ example: '0123456789', description: 'Electricity account, BR number' })
+  @IsOptional()
+  @Transform(emptyToNull)
+  @IsString()
+  @MaxLength(80)
+  referenceNo?: string | null;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(emptyToNull)
+  @IsString()
+  @MaxLength(2000)
+  notes?: string | null;
 }
 
 export class UpdatePartyDto extends PartialType(CreatePartyDto) {
@@ -92,6 +131,17 @@ export class QueryPartiesDto {
   @IsEnum(PartyKind)
   kind?: PartyKind;
 
+  @ApiPropertyOptional({ enum: PartyType })
+  @IsOptional()
+  @IsEnum(PartyType)
+  type?: PartyType;
+
+  @ApiPropertyOptional({ description: 'Only parties that hold a sponsor profile' })
+  @IsOptional()
+  @Transform(({ value }: { value: unknown }) => value === 'true' || value === true)
+  @IsBoolean()
+  sponsorsOnly?: boolean;
+
   @ApiPropertyOptional()
   @IsOptional()
   @Transform(({ value }: { value: unknown }) => value === 'true' || value === true)
@@ -106,7 +156,7 @@ export class QueryPartiesDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
+  @Transform(trim)
   @IsString()
   @MaxLength(120)
   search?: string;

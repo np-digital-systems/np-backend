@@ -7,7 +7,6 @@ import {
   IsNumber,
   IsOptional,
   IsPositive,
-  IsUUID,
   Max,
   Min,
 } from 'class-validator';
@@ -17,37 +16,34 @@ import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 export const SUBSCRIPTION_MODES = ['cash', 'bank', 'online'] as const;
 export type SubscriptionMode = (typeof SUBSCRIPTION_MODES)[number];
 
-export class SanththaMemberDto {
-  @ApiProperty() id!: string;
-  @ApiProperty() memberNo!: string;
+export class SanththaSponsorDto {
+  @ApiProperty({ description: 'The party id — a sponsor is a party' }) partyId!: number;
+  @ApiProperty() sponsorNo!: string;
   @ApiProperty() name!: string;
   @ApiProperty() nameTa!: string;
   @ApiProperty({ nullable: true }) phone!: string | null;
-  @ApiProperty() address!: string;
-  @ApiProperty({ nullable: true }) joinedOn!: string | null;
-  @ApiProperty({ description: 'Whether they still owe the yearly subscription' })
+  @ApiProperty({ nullable: true }) address!: string | null;
+  @ApiProperty({ nullable: true }) sponsorSince!: string | null;
+  @ApiProperty({ description: 'Whether the yearly subscription is due from them' })
   subscribes!: boolean;
 }
 
 export class SanththaPaymentDto {
   @ApiProperty() id!: number;
-  @ApiProperty() userId!: string;
-  @ApiProperty({ type: SanththaMemberDto }) member!: SanththaMemberDto;
+  @ApiProperty() sponsorId!: number;
+  @ApiProperty({ type: SanththaSponsorDto }) sponsor!: SanththaSponsorDto;
   @ApiProperty() year!: number;
   @ApiProperty() amount!: number;
   @ApiProperty() paidOn!: string;
-  @ApiProperty({
-    nullable: true,
-    description: 'The receipt voucher this payment was banked through',
-  })
+  @ApiProperty({ nullable: true, description: 'The receipt voucher this was banked through' })
   receiptVoucherRef!: string | null;
   @ApiProperty({ enum: SUBSCRIPTION_MODES }) mode!: SubscriptionMode;
   @ApiProperty() collectedBy!: string;
   @ApiProperty() createdAt!: Date;
 }
 
-export class SanththaRegisterRowDto extends SanththaMemberDto {
-  @ApiProperty({ description: 'Years this member has paid for' }) paidYears!: number[];
+export class SanththaRegisterRowDto extends SanththaSponsorDto {
+  @ApiProperty({ description: 'Years this sponsor has paid for' }) paidYears!: number[];
   @ApiProperty() totalPaid!: number;
   @ApiProperty({ description: 'Whether the year being asked about is settled' })
   paidThisYear!: boolean;
@@ -55,17 +51,46 @@ export class SanththaRegisterRowDto extends SanththaMemberDto {
 
 export class SanththaSummaryDto {
   @ApiProperty() year!: number;
-  @ApiProperty() members!: number;
+  @ApiProperty({ nullable: true, description: 'The fixed amount set for this year' })
+  rate!: number | null;
+  @ApiProperty() sponsors!: number;
   @ApiProperty() subscribing!: number;
   @ApiProperty() paid!: number;
   @ApiProperty() outstanding!: number;
   @ApiProperty() collected!: number;
+  @ApiProperty({ description: 'What the year should bring in at the set rate' })
+  expected!: number;
+}
+
+export class SanththaRateDto {
+  @ApiProperty() year!: number;
+  @ApiProperty() amount!: number;
+  @ApiProperty({ nullable: true }) setBy!: string | null;
+  @ApiProperty() setAt!: Date;
+}
+
+/** The rate is fixed for everyone and set once a year. */
+export class SetRateDto {
+  @ApiProperty({ minimum: 2000, maximum: 2100 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(2000)
+  @Max(2100)
+  year!: number;
+
+  @ApiProperty({ example: 1000 })
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @IsPositive()
+  amount!: number;
 }
 
 export class RecordPaymentDto {
-  @ApiProperty()
-  @IsUUID()
-  userId!: string;
+  @ApiProperty({ description: 'The sponsor paying — their party id' })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  sponsorId!: number;
 
   @ApiProperty({ minimum: 2000, maximum: 2100 })
   @Type(() => Number)
@@ -74,11 +99,12 @@ export class RecordPaymentDto {
   @Max(2100)
   year!: number;
 
-  @ApiProperty()
+  @ApiPropertyOptional({ description: 'Defaults to the rate set for the year' })
+  @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
-  amount!: number;
+  amount?: number;
 
   @ApiProperty({ example: '2026-05-01' })
   @IsDateString()
@@ -104,7 +130,7 @@ export class QueryRegisterDto extends PaginationQueryDto {
   @Max(2100)
   year?: number;
 
-  @ApiPropertyOptional({ description: 'Only members who have not paid for the year' })
+  @ApiPropertyOptional({ description: 'Only sponsors who have not paid for the year' })
   @IsOptional()
   @Type(() => Boolean)
   outstandingOnly?: boolean;
@@ -117,8 +143,9 @@ export class QueryPaymentsDto extends PaginationQueryDto {
   @IsInt()
   year?: number;
 
-  @ApiPropertyOptional()
+  @ApiPropertyOptional({ description: 'The sponsor’s party id' })
   @IsOptional()
-  @IsUUID()
-  userId?: string;
+  @Type(() => Number)
+  @IsInt()
+  sponsorId?: number;
 }

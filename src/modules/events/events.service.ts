@@ -22,17 +22,16 @@ import {
 import { PublicEventDto } from './dto/public-event.dto';
 import { deriveEventStatus, isOverdue } from './event-status';
 
-/*
- * Email and address live on the sign-in, not the party, so they are read
- * through the link where there is one. Most sponsors have none.
- */
+/** Contact detail lives on the party itself. */
 const SPONSOR_SELECT = {
   id: true,
   nameTa: true,
   nameEn: true,
   phone: true,
-  userId: true,
-  user: { select: { email: true, address: true } },
+  email: true,
+  address: true,
+  account: { select: { id: true } },
+  sponsor: { select: { sponsorNo: true } },
 } satisfies Prisma.PartySelect;
 
 const EVENT_INCLUDE = {
@@ -527,10 +526,11 @@ export class EventsService {
       id: row.id,
       name: row.nameTa,
       nameEn: row.nameEn ?? '',
-      email: canSeeContact ? (row.user?.email ?? null) : null,
+      email: canSeeContact ? row.email : null,
       phone: canSeeContact ? row.phone : null,
-      address: row.user?.address ?? '',
-      userId: row.userId,
+      address: row.address ?? '',
+      sponsorNo: row.sponsor?.sponsorNo ?? null,
+      accountId: row.account?.id ?? null,
     };
   }
 

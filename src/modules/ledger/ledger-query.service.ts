@@ -5,6 +5,9 @@ import { Prisma } from '../../generated/prisma/client';
 import { AccountType, VoucherStatus } from '../../generated/prisma/enums';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 
+/** The analytical dimensions carried on a coding line. */
+type Dimension = 'activityId' | 'partyId' | 'eventId';
+
 export interface Sides {
   debit: number;
   credit: number;
@@ -83,6 +86,14 @@ export class LedgerQueryService {
   }
 
   /**
+   * Totals per dated occurrence — what a village collection actually raised
+   * for this year's மார்கழி, rather than for the observance in general.
+   */
+  async byEvent(financialYearId?: number): Promise<Map<number, Sides>> {
+    return this.byDimension('eventId', financialYearId);
+  }
+
+  /**
    * Totals per dimension, split by the type of head each entry sits on.
    *
    * An activity's income and expenditure are two different questions asked of
@@ -90,7 +101,7 @@ export class LedgerQueryService {
    * type rather than queried twice.
    */
   async byDimensionAndType(
-    dimension: 'activityId' | 'partyId',
+    dimension: Dimension,
     financialYearId?: number,
   ): Promise<Map<number, Map<AccountType, Sides>>> {
     const rows = await this.prisma.ledgerEntry.groupBy({
@@ -133,7 +144,7 @@ export class LedgerQueryService {
   }
 
   private async byDimension(
-    dimension: 'activityId' | 'partyId',
+    dimension: Dimension,
     financialYearId?: number,
   ): Promise<Map<number, Sides>> {
     const rows = await this.prisma.ledgerEntry.groupBy({

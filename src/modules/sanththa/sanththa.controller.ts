@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query } from '@nestjs/common';
+import { Body, Controller, Get, Post, Put, Query } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
 import { Actor } from '../../common/decorators/actor.decorator';
@@ -12,8 +12,10 @@ import {
   QueryRegisterDto,
   RecordPaymentDto,
   SanththaPaymentDto,
+  SanththaRateDto,
   SanththaRegisterRowDto,
   SanththaSummaryDto,
+  SetRateDto,
 } from './dto/sanththa.dto';
 import { SanththaService } from './sanththa.service';
 
@@ -31,7 +33,7 @@ export class SanththaController {
   @ApiOperation({
     summary: 'The sanththa register',
     description:
-      'Everyone with a member number. Phone numbers are withheld unless you hold user:manage.',
+      'Every active sponsor. Contact detail is withheld unless you hold contribution:manage.',
   })
   async register(
     @Query() query: QueryRegisterDto,
@@ -46,6 +48,20 @@ export class SanththaController {
     return this.sanththa.summary(year ? Number(year) : undefined);
   }
 
+  @Get('rates')
+  @RequirePermissions('contribution:view')
+  @ApiOperation({ summary: 'The fixed amount set for each year' })
+  rates(): Promise<SanththaRateDto[]> {
+    return this.sanththa.rates();
+  }
+
+  @Put('rates')
+  @RequirePermissions('contribution:manage')
+  @ApiOperation({ summary: 'Set the year’s sanththa; payments already taken keep their amounts' })
+  setRate(@Body() dto: SetRateDto, @Actor() context: ActorContext): Promise<SanththaRateDto> {
+    return this.sanththa.setRate(dto, context);
+  }
+
   @Get('payments')
   @RequirePermissions('contribution:view')
   async payments(
@@ -57,7 +73,7 @@ export class SanththaController {
 
   @Post('payments')
   @RequirePermissions('contribution:record')
-  @ApiOperation({ summary: 'Record a year’s subscription; one per member per year' })
+  @ApiOperation({ summary: 'Record a year’s subscription; one per sponsor per year' })
   record(
     @Body() dto: RecordPaymentDto,
     @Actor() context: ActorContext,

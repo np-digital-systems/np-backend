@@ -44,14 +44,20 @@ export class SearchService {
   }
 
   private async users(q: string, take: number): Promise<SearchResultDto[]> {
-    const rows = await this.prisma.user.findMany({
+    const rows = await this.prisma.userAccount.findMany({
       where: {
         OR: [
-          { nameTa: contains(q) },
-          { fullName: contains(q) },
           { email: contains(q) },
-          { phone: contains(q) },
+          { party: { nameTa: contains(q) } },
+          { party: { nameEn: contains(q) } },
         ],
+      },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        isActive: true,
+        party: { select: { nameTa: true, nameEn: true, phone: true } },
       },
       take,
       orderBy: { createdAt: 'desc' },
@@ -60,32 +66,41 @@ export class SearchService {
     return rows.map((row) => ({
       id: row.id,
       type: 'User' as const,
-      title: row.fullName ?? row.nameTa,
-      subtitle: `${row.role.toUpperCase()}${row.phone ? ` · ${row.phone}` : ''}`,
+      title: row.party.nameEn ?? row.party.nameTa,
+      subtitle: `${row.role.toUpperCase()} · ${row.email}`,
       meta: row.isActive ? 'Active' : 'Inactive',
-      ref: row.memberNo,
+      ref: null,
       badge: null,
-      page: 'Users',
+      page: 'Staff Accounts',
     }));
   }
 
   private async members(q: string, take: number): Promise<SearchResultDto[]> {
-    const rows = await this.prisma.user.findMany({
+    const rows = await this.prisma.sponsor.findMany({
       where: {
-        memberNo: { not: null },
-        OR: [{ memberNo: contains(q) }, { nameTa: contains(q) }, { fullName: contains(q) }],
+        OR: [
+          { sponsorNo: contains(q) },
+          { party: { nameTa: contains(q) } },
+          { party: { nameEn: contains(q) } },
+        ],
+      },
+      select: {
+        partyId: true,
+        sponsorNo: true,
+        subscribes: true,
+        party: { select: { nameTa: true, nameEn: true, address: true } },
       },
       take,
-      orderBy: { memberNo: 'asc' },
+      orderBy: { sponsorNo: 'asc' },
     });
 
     return rows.map((row) => ({
-      id: row.id,
+      id: String(row.partyId),
       type: 'Sanththa' as const,
-      title: row.fullName ?? row.nameTa,
-      subtitle: row.address || 'Sanththa member',
-      meta: row.subscribes ? 'Subscribing' : 'Not subscribing',
-      ref: row.memberNo,
+      title: row.party.nameEn ?? row.party.nameTa,
+      subtitle: row.party.address || 'Sponsor',
+      meta: row.subscribes ? 'Subscribing' : 'Exempt',
+      ref: row.sponsorNo,
       badge: null,
       page: 'Sanththa Register',
     }));

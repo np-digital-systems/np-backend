@@ -1,9 +1,9 @@
-import { type UserRole } from '../../generated/prisma/enums';
+import { type AccountRole } from '../../generated/prisma/enums';
 
 export interface AuthenticatedUser {
   id: string;
   name: string;
-  role: UserRole;
+  role: AccountRole;
   sessionId: string;
 }
 

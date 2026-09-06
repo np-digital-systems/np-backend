@@ -1,7 +1,7 @@
 import { ApiProperty } from '@nestjs/swagger';
 import { ArrayUnique, IsArray, IsString, Matches } from 'class-validator';
 
-import { UserRole } from '../../../generated/prisma/enums';
+import { AccountRole } from '../../../generated/prisma/enums';
 
 export class PermissionDto {
   @ApiProperty() code!: string;
@@ -17,7 +17,7 @@ export class PermissionGroupDto {
 }
 
 export class RoleDto {
-  @ApiProperty({ enum: UserRole }) code!: UserRole;
+  @ApiProperty({ enum: AccountRole }) code!: AccountRole;
   @ApiProperty() label!: string;
   @ApiProperty() description!: string;
   @ApiProperty({ description: 'System roles cannot be removed' }) isSystem!: boolean;

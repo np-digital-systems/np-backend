@@ -25,7 +25,7 @@ export class PartiesController {
 
   @Get()
   @RequirePermissions('party:view')
-  @ApiOperation({ summary: 'Who entries are with — sponsors, staff, vendors and devotees' })
+  @ApiOperation({ summary: 'The register — every person and organisation the temple deals with' })
   findMany(@Query() query: QueryPartiesDto): Promise<PartyRecordDto[]> {
     return this.parties.findMany(query);
   }

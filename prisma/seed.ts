@@ -2,7 +2,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { hash } from '@node-rs/argon2';
 
 import { PrismaClient } from '../src/generated/prisma/client';
-import { UserRole } from '../src/generated/prisma/enums';
+import { AccountRole, PartyKind, PartyType } from '../src/generated/prisma/enums';
 
 process.loadEnvFile('.env');
 
@@ -15,8 +15,8 @@ const PERMISSION_GROUPS = [
   { code: 'accounting', label: 'Accounting', description: 'Vouchers, the ledger, books and bank accounts', sortOrder: 2 },
   { code: 'finance', label: 'Funds and property', description: 'Funds, projects, deposits, assets and reports', sortOrder: 3 },
   { code: 'events', label: 'Events', description: 'The calendar, event types and sponsorship', sortOrder: 4 },
-  { code: 'register', label: 'Sanththa register', description: 'Members and their yearly subscriptions', sortOrder: 5 },
-  { code: 'administration', label: 'Administration', description: 'Users, roles, the audit trail and settings', sortOrder: 6 },
+  { code: 'register', label: 'Sponsors and sanththa', description: 'The sponsor register and yearly subscriptions', sortOrder: 5 },
+  { code: 'administration', label: 'Administration', description: 'Sign-ins, roles, the audit trail and settings', sortOrder: 6 },
 ];
 
 const PERMISSIONS = [
@@ -26,8 +26,8 @@ const PERMISSIONS = [
   ['account:manage', 'accounting', 'Maintain the chart of accounts'],
   ['activity:view', 'accounting', 'View activities and what each brought in or cost'],
   ['activity:manage', 'accounting', 'Maintain the list of activities'],
-  ['party:view', 'accounting', 'View parties and what each contributed or was paid'],
-  ['party:manage', 'accounting', 'Maintain the list of parties'],
+  ['party:view', 'accounting', 'View the register and what each party contributed or was paid'],
+  ['party:manage', 'accounting', 'Maintain the register of people and organisations'],
   ['transaction:view', 'accounting', 'View posted transactions'],
   ['transaction:create', 'accounting', 'Record transactions'],
   ['transaction:export', 'accounting', 'Export transactions'],
@@ -69,21 +69,25 @@ const PERMISSIONS = [
   ['event-sponsor:view', 'events', 'View sponsorship assignments'],
   ['event-sponsor:manage', 'events', 'Assign sponsors and see their contact details'],
 
+  ['sponsor:view', 'register', 'View the sponsor register'],
+  ['sponsor:manage', 'register', 'Enrol sponsors and see their contact details'],
   ['contribution:view', 'register', 'View the sanththa register'],
   ['contribution:record', 'register', 'Record subscription payments'],
-  ['contribution:manage', 'register', 'Enrol members and see their contact details'],
+  ['contribution:manage', 'register', 'Set the yearly rate and see contact details'],
 
-  ['user:manage', 'administration', 'Manage users and staff accounts'],
+  ['user:manage', 'administration', 'Manage sign-ins and staff accounts'],
   ['role:manage', 'administration', 'Change what a role may do'],
   ['audit:view', 'administration', 'Read the audit trail'],
   ['settings:manage', 'administration', 'Change portal settings'],
 ] as const;
 
 const ROLES = [
-  { code: UserRole.admin, label: 'Administrator', description: 'Full access to the portal', isSystem: true, sortOrder: 1 },
-  { code: UserRole.accountant, label: 'Accountant', description: 'Keeps the books and approves vouchers', isSystem: true, sortOrder: 2 },
-  { code: UserRole.cashier, label: 'Cashier', description: 'Collects at the hundial and raises vouchers', isSystem: true, sortOrder: 3 },
-  { code: UserRole.user, label: 'Devotee', description: 'A member or sponsor with no operational access', isSystem: true, sortOrder: 4 },
+  { code: AccountRole.admin, label: 'Administrator', description: 'Full access to the portal', isSystem: true, sortOrder: 1 },
+  { code: AccountRole.accountant, label: 'Accountant', description: 'Keeps the books and approves vouchers', isSystem: true, sortOrder: 2 },
+  { code: AccountRole.cashier, label: 'Cashier', description: 'Collects at the hundial and raises vouchers', isSystem: true, sortOrder: 3 },
+  // One self-service role for everyone outside staff. What a member sees is
+  // derived from their party — sponsorships, payments — not from this.
+  { code: AccountRole.member, label: 'Member', description: 'A sponsor or devotee using the portal', isSystem: true, sortOrder: 4 },
 ];
 
 const ACCOUNTANT = [
@@ -100,11 +104,23 @@ const ACCOUNTANT = [
   'fixed-deposit:view', 'asset:view', 'asset:manage', 'report:generate',
   'event:view', 'event:export', 'event-schedule:view', 'event-sponsor:view',
   'financial-year:view',
+  'sponsor:view', 'sponsor:manage',
   'contribution:view', 'contribution:record', 'contribution:manage',
 ];
 
+/*
+ * A cashier raises vouchers, so they can read what a voucher is coded to.
+ *
+ * The four view permissions below are not extra reach — they are the pickers
+ * on the voucher form. Raising a receipt means naming a ledger head, the fund
+ * it is held in, sometimes a project, and the bank account it moved through;
+ * without them the screen cannot even load its options, which is what a
+ * cashier saw as "Something went wrong". None of the matching `:manage`
+ * permissions is granted, so this stays read-only.
+ */
 const CASHIER = [
   'dashboard:view',
+  'account:view', 'fund:view', 'project:view', 'bank-account:view',
   'activity:view', 'party:view',
   'transaction:view', 'transaction:create',
   'receipt-voucher:view', 'receipt-voucher:create',
@@ -113,14 +129,15 @@ const CASHIER = [
   'cash-book:view',
   'event:view', 'event-schedule:view', 'event-sponsor:view',
   'financial-year:view',
+  'sponsor:view',
   'contribution:view', 'contribution:record',
 ];
 
 const ROLE_PERMISSIONS: Record<string, string[]> = {
-  [UserRole.admin]: PERMISSIONS.map(([code]) => code),
-  [UserRole.accountant]: ACCOUNTANT,
-  [UserRole.cashier]: CASHIER,
-  [UserRole.user]: ['dashboard:view', 'event:view'],
+  [AccountRole.admin]: PERMISSIONS.map(([code]) => code),
+  [AccountRole.accountant]: ACCOUNTANT,
+  [AccountRole.cashier]: CASHIER,
+  [AccountRole.member]: ['dashboard:view', 'event:view'],
 };
 
 /*
@@ -159,10 +176,10 @@ async function main(): Promise<void> {
 
   for (const [roleCode, permissions] of Object.entries(ROLE_PERMISSIONS)) {
     await prisma.$transaction([
-      prisma.rolePermission.deleteMany({ where: { roleCode: roleCode as UserRole } }),
+      prisma.rolePermission.deleteMany({ where: { roleCode: roleCode as AccountRole } }),
       prisma.rolePermission.createMany({
         data: permissions.map((permissionCode) => ({
-          roleCode: roleCode as UserRole,
+          roleCode: roleCode as AccountRole,
           permissionCode,
         })),
       }),
@@ -192,22 +209,48 @@ async function main(): Promise<void> {
   const email = process.env.SEED_ADMIN_EMAIL ?? 'admin@kovil.lk';
   const password = process.env.SEED_ADMIN_PASSWORD ?? 'ChangeMe!2026';
 
-  await prisma.user.upsert({
+  // The register comes first: an account is granted to a party, never the other
+  // way round. Seeding in this order is the model in miniature.
+  const existing = await prisma.userAccount.findUnique({
     where: { email },
-    create: {
-      nameTa: 'நிர்வாகி',
-      fullName: 'Portal Administrator',
-      email,
-      passwordHash: await hash(password, { memoryCost: 19_456, timeCost: 2, parallelism: 1 }),
-      role: UserRole.admin,
-      address: '',
-    },
+    select: { id: true },
+  });
+
+  if (!existing) {
+    const party = await prisma.party.create({
+      data: {
+        type: PartyType.person,
+        nameTa: 'நிர்வாகி',
+        nameEn: 'Portal Administrator',
+        email,
+        roles: { create: [{ kind: PartyKind.staff }] },
+      },
+      select: { id: true },
+    });
+
+    await prisma.userAccount.create({
+      data: {
+        partyId: party.id,
+        email,
+        passwordHash: await hash(password, { memoryCost: 19_456, timeCost: 2, parallelism: 1 }),
+        role: AccountRole.admin,
+      },
+    });
+  }
+
+  // The sanththa is a fixed amount set once a year; without one the payment
+  // form has no default to offer.
+  const year = new Date().getFullYear();
+
+  await prisma.sanththaRate.upsert({
+    where: { year },
+    create: { year, amount: 1000 },
     update: {},
   });
 
   console.log(
     `Seeded ${PERMISSIONS.length} permissions across ${PERMISSION_GROUPS.length} groups, ` +
-      `${ROLES.length} roles and the admin account (${email}).`,
+      `${ROLES.length} roles, the ${year} sanththa rate and the admin account (${email}).`,
   );
 }
 

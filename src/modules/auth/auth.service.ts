@@ -8,6 +8,7 @@ import {
 import { hash, verify } from '@node-rs/argon2';
 
 import { ActorContext } from '../../common/types/authenticated-user';
+import { Prisma } from '../../generated/prisma/client';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { AuthTokensDto, AuthUserDto } from './dto/auth-response.dto';
@@ -19,12 +20,21 @@ import { TokenService } from './token.service';
 
 export const ARGON_OPTIONS = { memoryCost: 19_456, timeCost: 2, parallelism: 1 } as const;
 
+/** The name lives on the party, so every identity read hops through it. */
+const IDENTITY_SELECT = {
+  id: true,
+  email: true,
+  role: true,
+  isActive: true,
+  party: { select: { nameTa: true, nameEn: true } },
+} satisfies Prisma.UserAccountSelect;
+
+type IdentityRow = Prisma.UserAccountGetPayload<{ select: typeof IDENTITY_SELECT }>;
+
 interface RequestContext {
   ipAddress: string;
   userAgent: string;
 }
-
-type Identity = Omit<AuthUserDto, 'permissions'>;
 
 @Injectable()
 export class AuthService {
@@ -41,34 +51,43 @@ export class AuthService {
     return hash(password, ARGON_OPTIONS);
   }
 
-  async login(dto: LoginDto, context: RequestContext): Promise<AuthTokensDto> {
-    const user = await this.prisma.user.findUnique({
-      where: { email: dto.email },
-      select: {
-        id: true,
-        nameTa: true,
-        fullName: true,
-        email: true,
-        role: true,
-        isActive: true,
-        passwordHash: true,
-      },
+  /** The signed-in identity, for GET /auth/me. */
+  async identityOrFail(id: string): Promise<Omit<AuthUserDto, 'permissions'>> {
+    const account = await this.prisma.userAccount.findUnique({
+      where: { id },
+      select: IDENTITY_SELECT,
     });
 
-    const passwordMatches =
-      user?.passwordHash != null
-        ? await verify(user.passwordHash, dto.password).catch(() => false)
-        : await this.burnTime();
+    if (!account) throw new UnauthorizedException('This account no longer exists');
 
-    if (!user || !passwordMatches) throw new UnauthorizedException('Invalid credentials');
-    if (!user.isActive) throw new UnauthorizedException('This account is disabled');
+    return {
+      id: account.id,
+      nameTa: account.party.nameTa,
+      nameEn: account.party.nameEn,
+      email: account.email,
+      role: account.role,
+    };
+  }
+
+  async login(dto: LoginDto, context: RequestContext): Promise<AuthTokensDto> {
+    const account = await this.prisma.userAccount.findUnique({
+      where: { email: dto.email },
+      select: { ...IDENTITY_SELECT, passwordHash: true },
+    });
+
+    const passwordMatches = account
+      ? await verify(account.passwordHash, dto.password).catch(() => false)
+      : await this.burnTime();
+
+    if (!account || !passwordMatches) throw new UnauthorizedException('Invalid credentials');
+    if (!account.isActive) throw new UnauthorizedException('This account is disabled');
 
     const { token, hash: tokenHash } = this.tokens.createRefreshToken();
 
     const session = await this.prisma.$transaction(async (tx) => {
       const created = await tx.userSession.create({
         data: {
-          userId: user.id,
+          userId: account.id,
           tokenHash,
           deviceName: dto.deviceName ?? context.userAgent,
           ipAddress: context.ipAddress,
@@ -77,8 +96,8 @@ export class AuthService {
         select: { id: true },
       });
 
-      await tx.user.update({
-        where: { id: user.id },
+      await tx.userAccount.update({
+        where: { id: account.id },
         data: { lastLoginAt: new Date() },
         select: { id: true },
       });
@@ -86,14 +105,14 @@ export class AuthService {
       return created;
     });
 
-    const issued = await this.issue(user, session.id, token);
+    const issued = await this.issue(account, session.id, token);
 
     await this.audit.record(
       {
         actor: {
-          id: user.id,
-          name: this.displayName(user),
-          role: user.role,
+          id: account.id,
+          name: this.displayName(account),
+          role: account.role,
           sessionId: session.id,
         },
         ipAddress: context.ipAddress,
@@ -101,7 +120,7 @@ export class AuthService {
       { action: 'login', entity: 'user_session', entityRef: session.id, summary: 'Signed in' },
     );
 
-    this.logger.log({ userId: user.id, sessionId: session.id }, 'User signed in');
+    this.logger.log({ userId: account.id, sessionId: session.id }, 'User signed in');
 
     return issued;
   }
@@ -116,16 +135,7 @@ export class AuthService {
         deviceName: true,
         expiresAt: true,
         revokedAt: true,
-        user: {
-          select: {
-            id: true,
-            nameTa: true,
-            fullName: true,
-            email: true,
-            role: true,
-            isActive: true,
-          },
-        },
+        account: { select: IDENTITY_SELECT },
       },
     });
 
@@ -133,7 +143,7 @@ export class AuthService {
       throw new UnauthorizedException('Invalid or expired session');
     }
 
-    if (!session.user.isActive) throw new UnauthorizedException('This account is disabled');
+    if (!session.account.isActive) throw new UnauthorizedException('This account is disabled');
 
     const rotated = this.tokens.createRefreshToken();
 
@@ -146,7 +156,7 @@ export class AuthService {
 
       return tx.userSession.create({
         data: {
-          userId: session.user.id,
+          userId: session.account.id,
           tokenHash: rotated.hash,
           deviceName: session.deviceName,
           ipAddress: context.ipAddress,
@@ -156,7 +166,7 @@ export class AuthService {
       });
     });
 
-    return this.issue(session.user, next.id, rotated.token);
+    return this.issue(session.account, next.id, rotated.token);
   }
 
   async logout(context: ActorContext): Promise<void> {
@@ -220,20 +230,20 @@ export class AuthService {
       throw new BadRequestException('The new password must differ from the current one');
     }
 
-    const user = await this.prisma.user.findUnique({
+    const account = await this.prisma.userAccount.findUnique({
       where: { id: context.actor.id },
       select: { passwordHash: true },
     });
 
-    if (!user?.passwordHash) throw new UnauthorizedException('This account has no password set');
+    if (!account) throw new UnauthorizedException('This account no longer exists');
 
-    const matches = await verify(user.passwordHash, dto.currentPassword).catch(() => false);
+    const matches = await verify(account.passwordHash, dto.currentPassword).catch(() => false);
     if (!matches) throw new UnauthorizedException('The current password is incorrect');
 
     const passwordHash = await hash(dto.newPassword, ARGON_OPTIONS);
 
     await this.prisma.$transaction([
-      this.prisma.user.update({
+      this.prisma.userAccount.update({
         where: { id: context.actor.id },
         data: { passwordHash },
         select: { id: true },
@@ -246,37 +256,48 @@ export class AuthService {
 
     await this.audit.record(context, {
       action: 'update',
-      entity: 'user',
+      entity: 'user_account',
       entityRef: context.actor.id,
       summary: 'Changed their password; other sessions revoked',
     });
   }
 
   private async issue(
-    user: Identity,
+    account: IdentityRow,
     sessionId: string,
     refreshToken: string,
   ): Promise<AuthTokensDto> {
     const [accessToken, permissions] = await Promise.all([
       this.tokens.signAccessToken({
-        sub: user.id,
-        name: this.displayName(user),
-        role: user.role,
+        sub: account.id,
+        name: this.displayName(account),
+        role: account.role,
         sid: sessionId,
       }),
-      this.permissions.forRole(user.role),
+      this.permissions.forRole(account.role),
     ]);
 
     return {
       accessToken,
       refreshToken,
       expiresIn: this.tokens.accessTokenTtlSeconds(),
-      user: { ...user, permissions: [...permissions] },
+      user: this.toAuthUser(account, [...permissions]),
     };
   }
 
-  private displayName(user: Pick<Identity, 'fullName' | 'nameTa'>): string {
-    return user.fullName ?? user.nameTa;
+  private toAuthUser(account: IdentityRow, permissions: string[]): AuthUserDto {
+    return {
+      id: account.id,
+      nameTa: account.party.nameTa,
+      nameEn: account.party.nameEn,
+      email: account.email,
+      role: account.role,
+      permissions,
+    };
+  }
+
+  private displayName(account: IdentityRow): string {
+    return account.party.nameEn ?? account.party.nameTa;
   }
 
   private async burnTime(): Promise<false> {

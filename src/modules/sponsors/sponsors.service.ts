@@ -6,57 +6,43 @@ import {
 } from '@nestjs/common';
 
 import { PageDto, PageMetaDto } from '../../common/dto/page.dto';
+import { toRupees } from '../../common/money/money';
 import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
+import { PartyType } from '../../generated/prisma/enums';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
-import { PartyKind } from '../../generated/prisma/enums';
 import {
-  CreateSponsorDto,
-  QueryDirectoryDto,
-  QuerySponsorsDto,
-  SponsorAssignmentDto,
-  SponsorPartyDto,
-  UpdateSponsorDto,
-} from './dto/sponsor.dto';
-import { describeInstance } from './instance-label';
+  EnrolSponsorDto,
+  QuerySponsorRegisterDto,
+  SponsorDto,
+  SponsorRegisterRowDto,
+  UpdateSponsorProfileDto,
+} from './dto/sponsor-registry.dto';
 
-/*
- * Email and address live on the sign-in rather than the party, so they are
- * read through the link where there is one. A sponsor who never signs in has
- * a name and a phone number, which is all the temple ever had for them.
- */
-const SPONSOR_SELECT = {
-  id: true,
-  nameTa: true,
-  nameEn: true,
-  phone: true,
-  userId: true,
-  user: { select: { email: true, address: true } },
-} satisfies Prisma.PartySelect;
+const SPONSOR_INCLUDE = {
+  party: {
+    select: {
+      nameTa: true,
+      nameEn: true,
+      phone: true,
+      email: true,
+      address: true,
+      _count: { select: { sponsorships: true } },
+    },
+  },
+} satisfies Prisma.SponsorInclude;
 
-type SponsorRow = Prisma.PartyGetPayload<{ select: typeof SPONSOR_SELECT }>;
+type SponsorRow = Prisma.SponsorGetPayload<{ include: typeof SPONSOR_INCLUDE }>;
 
-const ASSIGNMENT_INCLUDE = {
-  eventType: true,
-  slot: true,
-  party: { select: SPONSOR_SELECT },
-} satisfies Prisma.EventTypeSponsorInclude;
-
-type AssignmentRow = Prisma.EventTypeSponsorGetPayload<{ include: typeof ASSIGNMENT_INCLUDE }>;
+const round = (value: number) => Math.round(value * 100) / 100;
 
 /**
- * Occurrence counts, keyed by slot for a placed sponsor and by type for one
- * still waiting: until a slot is chosen, every date the type keeps this year is
- * a date they might be given.
+ * The sponsor register.
+ *
+ * A sponsor is a party with a profile, so the identity is edited through the
+ * party and only what makes them a sponsor is stored here.
  */
-interface OccurrenceCounts {
-  bySlot: Map<number, number>;
-  byType: Map<number, number>;
-}
-
-const NO_OCCURRENCES: OccurrenceCounts = { bySlot: new Map(), byType: new Map() };
-
 @Injectable()
 export class SponsorsService {
   constructor(
@@ -64,357 +50,216 @@ export class SponsorsService {
     private readonly audit: AuditService,
   ) {}
 
-  /**
-   * Everyone who could be registered as a sponsor.
-   *
-   * Unfiltered by role on purpose. A florist the temple has only ever bought
-   * flowers from may sponsor a pooja next Friday, and should be findable
-   * without being re-registered as a second party — the act of registering
-   * them grants the role.
-   */
-  async directory(
-    query: QueryDirectoryDto,
+  async register(
+    query: QuerySponsorRegisterDto,
     canSeeContact: boolean,
-  ): Promise<PageDto<SponsorPartyDto>> {
-    const where: Prisma.PartyWhereInput = {
-      isActive: true,
-      roles: query.kind ? { some: { kind: query.kind } } : undefined,
-      OR: query.search
-        ? [
-            { nameTa: { contains: query.search, mode: 'insensitive' } },
-            { nameEn: { contains: query.search, mode: 'insensitive' } },
-          ]
+  ): Promise<PageDto<SponsorRegisterRowDto>> {
+    const year = query.year ?? new Date().getFullYear();
+
+    const where: Prisma.SponsorWhereInput = {
+      isActive: query.isActive,
+      party: query.search
+        ? {
+            OR: [
+              { nameTa: { contains: query.search, mode: 'insensitive' } },
+              { nameEn: { contains: query.search, mode: 'insensitive' } },
+            ],
+          }
         : undefined,
+      ...(query.outstandingOnly ? { subscribes: true, payments: { none: { year } } } : {}),
+      ...(query.search
+        ? { OR: [{ sponsorNo: { contains: query.search, mode: 'insensitive' } }] }
+        : {}),
     };
 
     const [rows, total] = await this.prisma.$transaction([
-      this.prisma.party.findMany({
+      this.prisma.sponsor.findMany({
         where,
-        select: SPONSOR_SELECT,
-        orderBy: { nameTa: 'asc' },
+        include: {
+          ...SPONSOR_INCLUDE,
+          payments: { select: { year: true, amount: true } },
+        },
+        orderBy: { sponsorNo: 'asc' },
         skip: query.skip,
         take: query.limit,
       }),
-      this.prisma.party.count({ where }),
+      this.prisma.sponsor.count({ where }),
     ]);
 
-    return new PageDto(
-      rows.map((row) => this.toSponsor(row, canSeeContact)),
-      new PageMetaDto(query.page, query.limit, total),
-    );
+    const data = rows.map((row) => ({
+      ...this.toDto(row, canSeeContact),
+      paidYears: row.payments.map((payment) => payment.year).sort((a, b) => b - a),
+      totalPaid: round(row.payments.reduce((sum, payment) => sum + toRupees(payment.amount), 0)),
+      paidThisYear: row.payments.some((payment) => payment.year === year),
+    }));
+
+    return new PageDto(data, new PageMetaDto(query.page, query.limit, total));
   }
 
-  /**
-   * Sponsors registered against an event type.
-   *
-   * Narrowing by instance keeps the unplaced sponsors in the result. They are
-   * the people this slot would be filled from, so a screen asking "who can take
-   * Week 12" wants them listed beside whoever already holds it.
-   */
-  async findMany(query: QuerySponsorsDto, canSeeContact: boolean): Promise<SponsorAssignmentDto[]> {
-    const year = query.year ?? new Date().getFullYear();
-
-    const assignments = await this.prisma.eventTypeSponsor.findMany({
-      where: {
-        eventTypeId: query.eventTypeId,
-        ...(query.instanceIdentifier === undefined
-          ? {}
-          : {
-              OR: [
-                { slot: { instanceIdentifier: query.instanceIdentifier } },
-                { slotId: null },
-              ],
-            }),
-      },
-      include: ASSIGNMENT_INCLUDE,
-      // Placed sponsors in slot order, then the pool still to be given one.
-      orderBy: [{ slotId: { sort: 'asc', nulls: 'last' } }, { id: 'asc' }],
+  async findOneOrFail(partyId: number, canSeeContact = true): Promise<SponsorDto> {
+    const sponsor = await this.prisma.sponsor.findUnique({
+      where: { partyId },
+      include: SPONSOR_INCLUDE,
     });
 
-    const occurrences = await this.countOccurrences(assignments, year);
+    if (!sponsor) throw new NotFoundException(`Party ${partyId} is not a sponsor`);
 
-    return assignments.map((assignment) =>
-      this.toAssignment(assignment, occurrences, canSeeContact),
-    );
+    return this.toDto(sponsor, canSeeContact);
   }
 
-  async findOne(id: number, canSeeContact: boolean): Promise<SponsorAssignmentDto> {
-    const assignment = await this.prisma.eventTypeSponsor.findUnique({
-      where: { id },
-      include: ASSIGNMENT_INCLUDE,
-    });
+  async enrol(dto: EnrolSponsorDto, context: ActorContext): Promise<SponsorDto> {
+    if (!dto.partyId && !dto.nameTa) {
+      throw new BadRequestException('Give either an existing partyId or a name to register');
+    }
 
-    if (!assignment) throw new NotFoundException(`Sponsor ${id} was not found`);
+    const sponsor = await this.prisma.$transaction(async (tx) => {
+      const partyId = dto.partyId ?? (await this.registerPerson(tx, dto));
 
-    const occurrences = await this.countOccurrences([assignment], new Date().getFullYear());
-
-    return this.toAssignment(assignment, occurrences, canSeeContact);
-  }
-
-  async create(dto: CreateSponsorDto, context: ActorContext): Promise<SponsorAssignmentDto> {
-    const slotId = await this.resolveSlotId(dto.eventTypeId, dto.instanceIdentifier);
-
-    await this.assertPartyIsUsable(dto.partyId);
-    await this.assertNotDuplicate(dto.eventTypeId, slotId, dto.partyId);
-
-    const created = await this.prisma.$transaction(async (tx) => {
-      // Sponsoring something is what makes a party a sponsor. Granting the role
-      // here is what lets the picker offer the temple's florist for next
-      // Friday's pooja without anyone registering them a second time.
-      await tx.partyRole.createMany({
-        data: [{ partyId: dto.partyId, kind: PartyKind.sponsor }],
-        skipDuplicates: true,
+      const party = await tx.party.findUnique({
+        where: { id: partyId },
+        select: { id: true, type: true, isActive: true, sponsor: { select: { partyId: true } } },
       });
 
-      return tx.eventTypeSponsor.create({
-        data: { eventTypeId: dto.eventTypeId, slotId, partyId: dto.partyId },
-        include: ASSIGNMENT_INCLUDE,
+      if (!party) throw new NotFoundException(`Party ${partyId} was not found`);
+      if (party.type !== PartyType.person) {
+        throw new BadRequestException('Only a person can be enrolled as a sponsor');
+      }
+      if (!party.isActive) throw new BadRequestException('That party is no longer active');
+      if (party.sponsor) throw new ConflictException('That party is already a sponsor');
+
+      if (dto.partyId) {
+        await tx.party.update({
+          where: { id: partyId },
+          data: { phone: dto.phone, email: dto.email, address: dto.address },
+          select: { id: true },
+        });
+      }
+
+      return tx.sponsor.create({
+        data: {
+          partyId,
+          sponsorNo: '',
+          sponsorSince: dto.sponsorSince ? new Date(dto.sponsorSince) : new Date(),
+          subscribes: dto.subscribes ?? true,
+          notes: dto.notes ?? null,
+        },
+        include: SPONSOR_INCLUDE,
       });
     });
 
     await this.audit.record(context, {
       action: 'create',
-      entity: 'event_type_sponsor',
-      entityRef: String(created.id),
-      summary: `Registered ${this.nameOf(created.party)} as a sponsor of ${created.eventType.nameTa} (${this.labelOf(created)})`,
+      entity: 'sponsor',
+      entityRef: String(sponsor.partyId),
+      summary: `Enrolled ${this.nameOf(sponsor)} on the sponsor register as ${sponsor.sponsorNo}`,
     });
 
-    return this.toAssignment(created, NO_OCCURRENCES, true);
+    return this.toDto(sponsor, true);
   }
 
+  /** Edits the party behind the sponsor, so a rename reaches every screen. */
   async update(
-    id: number,
-    dto: UpdateSponsorDto,
+    partyId: number,
+    dto: UpdateSponsorProfileDto,
     context: ActorContext,
-  ): Promise<SponsorAssignmentDto> {
-    const before = await this.prisma.eventTypeSponsor.findUnique({
-      where: { id },
-      include: ASSIGNMENT_INCLUDE,
+  ): Promise<SponsorDto> {
+    const before = await this.prisma.sponsor.findUnique({
+      where: { partyId },
+      include: SPONSOR_INCLUDE,
     });
 
-    if (!before) throw new NotFoundException(`Sponsor ${id} was not found`);
-    if (dto.partyId) await this.assertPartyIsUsable(dto.partyId);
+    if (!before) throw new NotFoundException(`Party ${partyId} is not a sponsor`);
 
-    const eventTypeId = dto.eventTypeId ?? before.eventTypeId;
-    const partyId = dto.partyId ?? before.partyId;
+    if (dto.subscribes === false) await this.assertNoPaymentsBlockExemption(partyId);
 
-    /*
-     * `undefined` leaves the placement alone; an explicit `null` returns the
-     * sponsor to the unplaced pool. Coalescing the two would make releasing a
-     * slot impossible, since the release is spelled with the falsy value.
-     */
-    const instanceIdentifier =
-      dto.instanceIdentifier === undefined
-        ? (before.slot?.instanceIdentifier ?? null)
-        : dto.instanceIdentifier;
-
-    const slotId = await this.resolveSlotId(eventTypeId, instanceIdentifier);
-
-    await this.assertNotDuplicate(eventTypeId, slotId, partyId, id);
-
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.partyRole.createMany({
-        data: [{ partyId, kind: PartyKind.sponsor }],
-        skipDuplicates: true,
+    const sponsor = await this.prisma.$transaction(async (tx) => {
+      await tx.party.update({
+        where: { id: partyId },
+        data: {
+          nameTa: dto.nameTa,
+          nameEn: dto.nameEn,
+          phone: dto.phone,
+          email: dto.email,
+          address: dto.address,
+        },
+        select: { id: true },
       });
 
-      return tx.eventTypeSponsor.update({
-        where: { id },
-        data: { eventTypeId, slotId, partyId },
-        include: ASSIGNMENT_INCLUDE,
+      return tx.sponsor.update({
+        where: { partyId },
+        data: { subscribes: dto.subscribes, isActive: dto.isActive, notes: dto.notes },
+        include: SPONSOR_INCLUDE,
       });
     });
 
     await this.audit.record(context, {
       action: 'update',
-      entity: 'event_type_sponsor',
-      entityRef: String(id),
-      summary: `Updated the ${updated.eventType.nameTa} sponsor ${this.nameOf(updated.party)} (${this.labelOf(updated)})`,
-      diff: AuditService.diff(
-        { slotId: before.slotId, partyId: before.partyId },
-        { slotId: updated.slotId, partyId: updated.partyId },
-      ),
+      entity: 'sponsor',
+      entityRef: String(partyId),
+      summary: `Updated the sponsor ${this.nameOf(sponsor)}`,
+      diff: AuditService.diff({ ...this.toDto(before, true) }, { ...this.toDto(sponsor, true) }),
     });
 
-    return this.toAssignment(updated, NO_OCCURRENCES, true);
+    return this.toDto(sponsor, true);
   }
 
-  async remove(id: number, context: ActorContext): Promise<void> {
-    const assignment = await this.prisma.eventTypeSponsor.findUnique({
-      where: { id },
-      include: ASSIGNMENT_INCLUDE,
-    });
-
-    if (!assignment) throw new NotFoundException(`Sponsor ${id} was not found`);
-
-    await this.prisma.eventTypeSponsor.delete({ where: { id } });
-
-    await this.audit.record(context, {
-      action: 'delete',
-      entity: 'event_type_sponsor',
-      entityRef: String(id),
-      summary: `Removed ${this.nameOf(assignment.party)} as a sponsor of ${assignment.eventType.nameTa} (${this.labelOf(assignment)})`,
-    });
+  async retire(partyId: number, context: ActorContext): Promise<SponsorDto> {
+    return this.update(partyId, { isActive: false }, context);
   }
 
-  /**
-   * The slot a sponsorship attaches to, if it has been given one yet.
-   *
-   * Naming no instance is a placement in its own right — the sponsor joins the
-   * pool for the type and is given a slot later — so it is answered with null
-   * rather than refused. Naming one the type never declared is still refused,
-   * by lookup rather than by an arithmetic check that could drift from it.
-   */
-  private async resolveSlotId(
-    eventTypeId: number,
-    instanceIdentifier: number | null | undefined,
-  ): Promise<number | null> {
-    const eventType = await this.prisma.eventType.findUnique({ where: { id: eventTypeId } });
-
-    if (!eventType) throw new NotFoundException(`Event type ${eventTypeId} was not found`);
-
-    if (instanceIdentifier == null) return null;
-
-    const slot = await this.prisma.eventSlot.findUnique({
-      where: { eventTypeId_instanceIdentifier: { eventTypeId, instanceIdentifier } },
+  private async registerPerson(
+    tx: Prisma.TransactionClient,
+    dto: EnrolSponsorDto,
+  ): Promise<number> {
+    const party = await tx.party.create({
+      data: {
+        type: PartyType.person,
+        nameTa: dto.nameTa!,
+        nameEn: dto.nameEn ?? null,
+        phone: dto.phone ?? null,
+        email: dto.email ?? null,
+        address: dto.address ?? null,
+      },
       select: { id: true },
     });
 
-    if (!slot) {
-      throw new BadRequestException(
-        `${eventType.nameTa} has ${eventType.noOfInstances} instance(s); ${instanceIdentifier} is out of range`,
-      );
-    }
-
-    return slot.id;
+    return party.id;
   }
 
-  /**
-   * The composite unique index cannot police the unplaced pool — Postgres
-   * treats each null slot as distinct from every other null — so the duplicate
-   * check lives here for both cases, and reads the same either way.
+  /*
+   * Making a sponsor exempt hides the year's dues from them. Doing it after
+   * they have already paid would leave a payment the register no longer
+   * expects, so the exemption is refused rather than the payment orphaned.
    */
-  private async assertNotDuplicate(
-    eventTypeId: number,
-    slotId: number | null,
-    partyId: number,
-    exceptId?: number,
-  ): Promise<void> {
-    const existing = await this.prisma.eventTypeSponsor.findFirst({
-      where: {
-        eventTypeId,
-        slotId,
-        partyId,
-        id: exceptId ? { not: exceptId } : undefined,
-      },
-      include: ASSIGNMENT_INCLUDE,
-    });
+  private async assertNoPaymentsBlockExemption(partyId: number): Promise<void> {
+    const year = new Date().getFullYear();
+    const paid = await this.prisma.sanththaPayment.count({ where: { sponsorId: partyId, year } });
 
-    if (existing) {
+    if (paid > 0) {
       throw new ConflictException(
-        `${this.nameOf(existing.party)} is already a sponsor of ${existing.eventType.nameTa} (${this.labelOf(existing)})`,
+        `This sponsor has already paid the ${year} sanththa; reverse the payment before making them exempt`,
       );
     }
   }
 
-  private async assertPartyIsUsable(partyId: number): Promise<void> {
-    const party = await this.prisma.party.findUnique({
-      where: { id: partyId },
-      select: { isActive: true, nameTa: true },
-    });
-
-    if (!party) throw new NotFoundException(`Party ${partyId} was not found`);
-    if (!party.isActive) throw new BadRequestException(`${party.nameTa} is retired`);
-  }
-
-  /**
-   * How many dated occurrences each sponsor stands over this year: the one slot
-   * for a placed row, every slot of the type for one still in the pool.
-   *
-   * Counted per type rather than per slot, because the unplaced rows have no
-   * slot to be counted by and their type's whole year is what they stand over.
-   */
-  private async countOccurrences(
-    assignments: { eventTypeId: number }[],
-    year: number,
-  ): Promise<OccurrenceCounts> {
-    if (assignments.length === 0) return NO_OCCURRENCES;
-
-    const rows = await this.prisma.event.findMany({
-      where: {
-        slot: { eventTypeId: { in: [...new Set(assignments.map((a) => a.eventTypeId))] } },
-        scheduledDate: {
-          gte: new Date(Date.UTC(year, 0, 1)),
-          lt: new Date(Date.UTC(year + 1, 0, 1)),
-        },
-      },
-      select: { slotId: true, slot: { select: { eventTypeId: true } } },
-    });
-
-    const bySlot = new Map<number, number>();
-    const byType = new Map<number, number>();
-
-    for (const row of rows) {
-      bySlot.set(row.slotId, (bySlot.get(row.slotId) ?? 0) + 1);
-      byType.set(row.slot.eventTypeId, (byType.get(row.slot.eventTypeId) ?? 0) + 1);
-    }
-
-    return { bySlot, byType };
-  }
-
-  private toAssignment(
-    assignment: AssignmentRow,
-    occurrences: OccurrenceCounts,
-    canSeeContact: boolean,
-  ): SponsorAssignmentDto {
+  private toDto(sponsor: SponsorRow, canSeeContact: boolean): SponsorDto {
     return {
-      id: assignment.id,
-      eventTypeId: assignment.eventTypeId,
-      slotId: assignment.slotId,
-      // Read through the slot where there is one; null says "not placed yet".
-      instanceIdentifier: assignment.slot?.instanceIdentifier ?? null,
-      customInstanceName: assignment.slot?.customInstanceName ?? null,
-      partyId: assignment.partyId,
-      createdAt: assignment.createdAt,
-      eventType: {
-        id: assignment.eventType.id,
-        name: assignment.eventType.nameTa,
-        nameEn: assignment.eventType.nameEn ?? '',
-        frequencyType: assignment.eventType.frequencyType,
-        noOfInstances: assignment.eventType.noOfInstances,
-        createdAt: assignment.eventType.createdAt,
-        updatedAt: assignment.eventType.updatedAt,
-      },
-      sponsor: this.toSponsor(assignment.party, canSeeContact),
-      instanceLabel: this.labelOf(assignment),
-      occurrences:
-        assignment.slotId === null
-          ? (occurrences.byType.get(assignment.eventTypeId) ?? 0)
-          : (occurrences.bySlot.get(assignment.slotId) ?? 0),
+      partyId: sponsor.partyId,
+      sponsorNo: sponsor.sponsorNo,
+      name: sponsor.party.nameTa,
+      nameEn: sponsor.party.nameEn ?? '',
+      phone: canSeeContact ? sponsor.party.phone : null,
+      email: canSeeContact ? sponsor.party.email : null,
+      address: canSeeContact ? sponsor.party.address : null,
+      sponsorSince: sponsor.sponsorSince,
+      subscribes: sponsor.subscribes,
+      isActive: sponsor.isActive,
+      notes: sponsor.notes,
+      sponsorships: sponsor.party._count.sponsorships,
     };
   }
 
-  private labelOf(assignment: AssignmentRow): string {
-    return describeInstance(
-      assignment.eventType.frequencyType,
-      assignment.slot?.instanceIdentifier,
-      assignment.slot?.customInstanceName,
-    );
-  }
-
-  private toSponsor(row: SponsorRow, canSeeContact: boolean): SponsorPartyDto {
-    return {
-      id: row.id,
-      name: row.nameTa,
-      nameEn: row.nameEn ?? '',
-      email: canSeeContact ? (row.user?.email ?? null) : null,
-      phone: canSeeContact ? row.phone : null,
-      address: row.user?.address ?? '',
-      userId: row.userId,
-    };
-  }
-
-  private nameOf(row: Pick<SponsorRow, 'nameEn' | 'nameTa'>): string {
-    return row.nameEn ?? row.nameTa;
+  private nameOf(sponsor: SponsorRow): string {
+    return sponsor.party.nameEn ?? sponsor.party.nameTa;
   }
 }

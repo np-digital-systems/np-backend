@@ -16,17 +16,16 @@ export class SponsorPartyDto {
   @ApiProperty() id!: number;
   @ApiProperty({ description: 'Tamil name — the language the calendar is kept in' }) name!: string;
   @ApiProperty() nameEn!: string;
-  @ApiProperty({
-    nullable: true,
-    description: 'From the linked sign-in. Null unless you hold event-sponsor:manage',
-  })
+  @ApiProperty({ nullable: true, description: 'Null unless you hold event-sponsor:manage' })
   email!: string | null;
   @ApiProperty({ nullable: true, description: 'Null unless you hold event-sponsor:manage' })
   phone!: string | null;
-  @ApiProperty({ description: 'From the linked sign-in; empty when there is none' })
+  @ApiProperty({ description: 'Empty when the party has none recorded' })
   address!: string;
+  @ApiProperty({ nullable: true, description: 'Set once they are on the sponsor register' })
+  sponsorNo!: string | null;
   @ApiProperty({ nullable: true, description: 'Set when this sponsor can also sign in' })
-  userId!: string | null;
+  accountId!: string | null;
 }
 
 export class EventTypeSummaryDto {

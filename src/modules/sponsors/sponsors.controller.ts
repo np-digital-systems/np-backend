@@ -3,8 +3,6 @@ import {
   Controller,
   Delete,
   Get,
-  HttpCode,
-  HttpStatus,
   Param,
   ParseIntPipe,
   Patch,
@@ -20,16 +18,15 @@ import { PageDto } from '../../common/dto/page.dto';
 import type { ActorContext, AuthenticatedUser } from '../../common/types/authenticated-user';
 import { PermissionsService } from '../auth/permissions.service';
 import {
-  CreateSponsorDto,
-  QueryDirectoryDto,
-  QuerySponsorsDto,
-  SponsorAssignmentDto,
-  SponsorPartyDto,
-  UpdateSponsorDto,
-} from './dto/sponsor.dto';
+  EnrolSponsorDto,
+  QuerySponsorRegisterDto,
+  SponsorDto,
+  SponsorRegisterRowDto,
+  UpdateSponsorProfileDto,
+} from './dto/sponsor-registry.dto';
 import { SponsorsService } from './sponsors.service';
 
-const MANAGE = 'event-sponsor:manage';
+const MANAGE = 'sponsor:manage';
 
 @ApiTags('sponsors')
 @ApiBearerAuth()
@@ -41,66 +38,50 @@ export class SponsorsController {
   ) {}
 
   @Get()
-  @RequirePermissions('event-sponsor:view')
-  @ApiOperation({
-    summary: 'Sponsors registered against event types',
-    description:
-      'Filter by eventTypeId, and optionally by instanceIdentifier — which keeps the sponsors registered against the whole type, since they stand for every instance of it. Contact details are omitted from the payload unless you hold event-sponsor:manage; they are withheld at the server, not hidden in the client.',
-  })
-  async findMany(
-    @Query() query: QuerySponsorsDto,
+  @RequirePermissions('sponsor:view')
+  @ApiOperation({ summary: 'The sponsor register, with sanththa status for the year' })
+  async register(
+    @Query() query: QuerySponsorRegisterDto,
     @CurrentUser() user: AuthenticatedUser,
-  ): Promise<SponsorAssignmentDto[]> {
-    return this.sponsors.findMany(query, await this.canSeeContact(user));
+  ): Promise<PageDto<SponsorRegisterRowDto>> {
+    return this.sponsors.register(query, await this.canSeeContact(user));
   }
 
-  @Get('directory')
-  @RequirePermissions('event-sponsor:view')
-  @ApiOperation({ summary: 'Everyone in the directory who could be registered as a sponsor' })
-  async directory(
-    @Query() query: QueryDirectoryDto,
-    @CurrentUser() user: AuthenticatedUser,
-  ): Promise<PageDto<SponsorPartyDto>> {
-    return this.sponsors.directory(query, await this.canSeeContact(user));
-  }
-
-  @Get(':id')
-  @RequirePermissions('event-sponsor:view')
+  @Get(':partyId')
+  @RequirePermissions('sponsor:view')
   async findOne(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('partyId', ParseIntPipe) partyId: number,
     @CurrentUser() user: AuthenticatedUser,
-  ): Promise<SponsorAssignmentDto> {
-    return this.sponsors.findOne(id, await this.canSeeContact(user));
+  ): Promise<SponsorDto> {
+    return this.sponsors.findOneOrFail(partyId, await this.canSeeContact(user));
   }
 
   @Post()
   @RequirePermissions(MANAGE)
-  @ApiOperation({
-    summary: 'Register a sponsor against an event type',
-    description: 'Omit instanceIdentifier to have them stand for every instance of the type.',
-  })
-  create(
-    @Body() dto: CreateSponsorDto,
-    @Actor() context: ActorContext,
-  ): Promise<SponsorAssignmentDto> {
-    return this.sponsors.create(dto, context);
+  @ApiOperation({ summary: 'Enrol a sponsor; the database allocates the sponsor number' })
+  enrol(@Body() dto: EnrolSponsorDto, @Actor() context: ActorContext): Promise<SponsorDto> {
+    return this.sponsors.enrol(dto, context);
   }
 
-  @Patch(':id')
+  @Patch(':partyId')
   @RequirePermissions(MANAGE)
+  @ApiOperation({ summary: 'Edit a sponsor; names and contact detail are written to the party' })
   update(
-    @Param('id', ParseIntPipe) id: number,
-    @Body() dto: UpdateSponsorDto,
+    @Param('partyId', ParseIntPipe) partyId: number,
+    @Body() dto: UpdateSponsorProfileDto,
     @Actor() context: ActorContext,
-  ): Promise<SponsorAssignmentDto> {
-    return this.sponsors.update(id, dto, context);
+  ): Promise<SponsorDto> {
+    return this.sponsors.update(partyId, dto, context);
   }
 
-  @Delete(':id')
+  @Delete(':partyId')
   @RequirePermissions(MANAGE)
-  @HttpCode(HttpStatus.NO_CONTENT)
-  remove(@Param('id', ParseIntPipe) id: number, @Actor() context: ActorContext): Promise<void> {
-    return this.sponsors.remove(id, context);
+  @ApiOperation({ summary: 'Retire a sponsor; their party and history remain' })
+  retire(
+    @Param('partyId', ParseIntPipe) partyId: number,
+    @Actor() context: ActorContext,
+  ): Promise<SponsorDto> {
+    return this.sponsors.retire(partyId, context);
   }
 
   private async canSeeContact(user: AuthenticatedUser): Promise<boolean> {

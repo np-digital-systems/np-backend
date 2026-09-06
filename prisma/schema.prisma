@@ -10,13 +10,32 @@ datasource db {
   provider = "postgresql"
 }
 
-enum UserRole {
+/// What a sign-in may do. Everyone outside staff shares `member`; what the
+/// portal shows them is derived from their party, not from this.
+enum AccountRole {
   admin
   accountant
   cashier
-  user
+  member
 
-  @@map("user_role")
+  @@map("account_role")
+}
+
+enum PartyType {
+  person
+  organisation
+
+  @@map("party_type")
+}
+
+/// What a party is to the temple, as a set rather than a single label.
+/// There is no `sponsor` here: a row in `sponsors` is the sponsor role.
+enum PartyKind {
+  devotee
+  vendor
+  staff
+
+  @@map("party_kind")
 }
 
 enum AccountType {
@@ -130,11 +149,6 @@ enum FrequencyType {
   @@map("frequency_type")
 }
 
-/*
- * What an activity is, so the list can be grouped and filtered. A pooja is the
- * one every temple has; the rest exist so hall rental and general upkeep have
- * somewhere to sit without a schema change.
- */
 enum ActivityKind {
   pooja
   service
@@ -144,18 +158,14 @@ enum ActivityKind {
   @@map("activity_kind")
 }
 
-/*
- * Where a party stands in relation to the temple. Kept deliberately coarse —
- * a person may sponsor a pooja one year and supply flowers the next, and the
- * label is for grouping a list, not for controlling what they may appear on.
- */
-enum PartyKind {
-  sponsor
-  staff
-  vendor
-  devotee
+/// How an observance is paid for. `general` means a village collection with no
+/// named sponsor, which is why its occurrences carry a null sponsor by design
+/// rather than by omission.
+enum EventFunding {
+  sponsored
+  general
 
-  @@map("party_kind")
+  @@map("event_funding")
 }
 
 enum FinancialYearStatus {
@@ -204,36 +214,130 @@ enum NotificationPriority {
   @@map("notification_priority")
 }
 
-model User {
-  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  nameTa       String    @map("name_ta")
-  fullName     String?   @map("full_name")
-  email        String?   @unique(map: "users_email_key") @db.Citext
-  passwordHash String?   @map("password_hash")
-  phone        String?
-  address      String    @default("")
-  role         UserRole  @default(user)
-  isActive     Boolean   @default(true) @map("is_active")
-  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz(6)
-  memberNo     String?   @unique(map: "users_member_no_key") @map("member_no")
-  joinedOn     DateTime? @map("joined_on") @db.Date
-  subscribes   Boolean   @default(false)
-  notes        String?
-  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+/// Everyone and everything the temple deals with, and the only place a name is
+/// stored. Contact columns are all optional: the electricity board has an
+/// account number and no phone, a walk-in donor has a name and nothing else.
+model Party {
+  id          Int       @id @default(autoincrement())
+  type        PartyType @default(person)
+  nameTa      String    @map("name_ta")
+  nameEn      String?   @map("name_en")
+  phone       String?
+  email       String?
+  address     String?
+  /// Their account number with us, or ours with them.
+  referenceNo String?   @map("reference_no")
+  notes       String?
+  isActive    Boolean   @default(true) @map("is_active")
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
+  roles                PartyRole[]
+  sponsor              Sponsor?
+  account              UserAccount?
+  vouchers             Voucher[]
+  ledgerLines          LedgerEntry[]
+  defaultForActivities Activity[]         @relation("ActivityDefaultParty")
+  defaultForAccounts   Account[]          @relation("AccountDefaultParty")
+  sponsorships         EventTypeSponsor[]
+  eventsSponsored      Event[]
+
+  @@index([isActive], map: "parties_active")
+  @@index([type], map: "parties_type")
+  @@index([nameTa(ops: raw("gin_trgm_ops"))], map: "parties_name", type: Gin)
+  @@map("parties")
+}
+
+model PartyRole {
+  partyId Int       @map("party_id")
+  kind    PartyKind
+
+  party Party @relation(fields: [partyId], references: [id], onDelete: Cascade)
+
+  @@id([partyId, kind])
+  @@index([kind], map: "party_roles_kind")
+  @@map("party_roles")
+}
+
+/// A sponsor profile. The primary key is the foreign key, so the 1:1 with a
+/// party cannot be broken and no name is stored twice.
+model Sponsor {
+  partyId      Int      @id @map("party_id")
+  sponsorNo    String   @unique(map: "sponsors_sponsor_no_key") @map("sponsor_no")
+  sponsorSince DateTime @map("sponsor_since") @db.Date
+  subscribes   Boolean  @default(true)
+  isActive     Boolean  @default(true) @map("is_active")
+  notes        String?
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  party    Party             @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  payments SanththaPayment[]
+
+  @@index([isActive], map: "sponsors_active")
+  @@map("sponsors")
+}
+
+/// The subscription due from every sponsor for a year. Held per year so raising
+/// the rate cannot restate what an earlier year charged.
+model SanththaRate {
+  year   Int      @id
+  amount Decimal  @db.Decimal(12, 2)
+  setBy  String?  @map("set_by") @db.Uuid
+  setAt  DateTime @default(now()) @map("set_at") @db.Timestamptz(6)
+
+  setByAccount UserAccount? @relation(fields: [setBy], references: [id])
+
+  @@map("sanththa_rates")
+}
+
+model SanththaPayment {
+  id               Int         @id @default(autoincrement())
+  sponsorId        Int         @map("sponsor_id")
+  year             Int
+  amount           Decimal     @db.Decimal(12, 2)
+  paidOn           DateTime    @map("paid_on") @db.Date
+  receiptVoucherId BigInt?     @unique(map: "one_payment_per_receipt") @map("receipt_voucher_id")
+  mode             PaymentMode
+  collectedBy      String      @map("collected_by") @db.Uuid
+  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  sponsor          Sponsor     @relation(fields: [sponsorId], references: [partyId])
+  collectedByUser  UserAccount @relation("SanththaCollector", fields: [collectedBy], references: [id])
+  receiptVoucher   Voucher?    @relation(fields: [receiptVoucherId], references: [id])
+
+  @@unique([sponsorId, year], map: "one_payment_per_sponsor_per_year")
+  @@index([year], map: "payments_year")
+  @@index([sponsorId], map: "payments_sponsor")
+  @@map("sanththa_payments")
+}
+
+/// A sign-in. Credentials only — the name, phone and address belong to the
+/// party this account is for.
+model UserAccount {
+  id           String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  partyId      Int         @unique(map: "user_accounts_party_id_key") @map("party_id")
+  email        String      @unique(map: "user_accounts_email_key") @db.Citext
+  passwordHash String      @map("password_hash")
+  role         AccountRole
+  isActive     Boolean     @default(true) @map("is_active")
+  lastLoginAt  DateTime?   @map("last_login_at") @db.Timestamptz(6)
+  createdAt    DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  party               Party                   @relation(fields: [partyId], references: [id])
   sessions            UserSession[]
   closedFinancialYear FinancialYear[]
-  vouchersCreated     Voucher[]             @relation("VoucherCreatedBy")
-  vouchersDecided     Voucher[]             @relation("VoucherDecidedBy")
-  subscriptionsPaid   SanththaPayment[]     @relation("SanththaPayer")
-  subscriptionsTaken  SanththaPayment[]     @relation("SanththaCollector")
+  vouchersCreated     Voucher[]               @relation("VoucherCreatedBy")
+  vouchersDecided     Voucher[]               @relation("VoucherDecidedBy")
+  subscriptionsTaken  SanththaPayment[]       @relation("SanththaCollector")
+  ratesSet            SanththaRate[]
   auditEntries        AuditLog[]
   notifications       NotificationRecipient[]
   settingsUpdated     Setting[]
-  party               Party?
 
-  @@map("users")
+  @@index([role], map: "user_accounts_role")
+  @@map("user_accounts")
 }
 
 model UserSession {
@@ -246,18 +350,18 @@ model UserSession {
   expiresAt  DateTime  @map("expires_at") @db.Timestamptz(6)
   revokedAt  DateTime? @map("revoked_at") @db.Timestamptz(6)
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account UserAccount @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([expiresAt], map: "user_sessions_expiry")
   @@map("user_sessions")
 }
 
 model Role {
-  code        UserRole @id
+  code        AccountRole @id
   label       String
   description String
-  isSystem    Boolean  @default(false) @map("is_system")
-  sortOrder   Int      @default(0) @map("sort_order") @db.SmallInt
+  isSystem    Boolean     @default(false) @map("is_system")
+  sortOrder   Int         @default(0) @map("sort_order") @db.SmallInt
 
   permissions RolePermission[]
 
@@ -288,8 +392,8 @@ model Permission {
 }
 
 model RolePermission {
-  roleCode       UserRole @map("role_code")
-  permissionCode String   @map("permission_code")
+  roleCode       AccountRole @map("role_code")
+  permissionCode String      @map("permission_code")
 
   role       Role       @relation(fields: [roleCode], references: [code], onDelete: Cascade)
   permission Permission @relation(fields: [permissionCode], references: [code], onDelete: Cascade)
@@ -312,7 +416,7 @@ model FinancialYear {
   closedOn       DateTime?           @map("closed_on") @db.Timestamptz(6)
   closedBy       String?             @map("closed_by") @db.Uuid
 
-  closedByUser User?             @relation(fields: [closedBy], references: [id])
+  closedByUser UserAccount?      @relation(fields: [closedBy], references: [id])
   vouchers     Voucher[]
   sequences    VoucherSequence[]
 
@@ -329,17 +433,21 @@ model Account {
   isPostable     Boolean     @default(true) @map("is_postable")
   isActive       Boolean     @default(true) @map("is_active")
   openingBalance Decimal     @default(0) @map("opening_balance") @db.Decimal(14, 2)
-  // Offered when this head is chosen. A kurukkal honorarium is always paid to
-  // the same person, so the head remembers rather than the clerk retyping.
+  /// Only for heads that deal with exactly one party — electricity, water,
+  /// rates. Never on a shared head like salaries. A default, not a rule.
+  defaultPartyId Int?        @map("default_party_id")
   createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  parent       Account?      @relation("AccountTree", fields: [parentId], references: [id])
-  children     Account[]     @relation("AccountTree")
-  bankAccount  BankAccount?
-  voucherLines VoucherLine[]
-  ledgerLines  LedgerEntry[]
+  parent               Account?      @relation("AccountTree", fields: [parentId], references: [id])
+  children             Account[]     @relation("AccountTree")
+  defaultParty         Party?        @relation("AccountDefaultParty", fields: [defaultPartyId], references: [id])
+  bankAccount          BankAccount?
+  voucherLines         VoucherLine[]
+  ledgerLines          LedgerEntry[]
+  defaultForActivities Activity[]    @relation("ActivityDefaultAccount")
 
   @@index([parentId], map: "accounts_parent")
+  @@index([defaultPartyId], map: "accounts_default_party")
   @@map("accounts")
 }
 
@@ -382,39 +490,29 @@ model Project {
   @@map("projects")
 }
 
-/*
- * An activity: what an entry was for.
- *
- * The temple's answer to a cost centre. Both income and expenditure carry one,
- * which is what lets a pooja be read as a whole — sponsorship in against
- * priest time out — where an income head alone can only ever show one side.
- *
- * A new pooja, a new festival, a hall let out for a wedding: each is a row
- * somebody adds, never a column somebody migrates.
- */
+/// What an entry was for. Both income and expenditure carry one, which is what
+/// lets a pooja be read as a whole — sponsorship in against priest time out.
 model Activity {
-  id            Int          @id @default(autoincrement())
-  nameTa        String       @unique(map: "activities_name_ta_key") @map("name_ta")
-  nameEn        String?      @map("name_en")
-  kind          ActivityKind @default(general)
-  /*
-   * The coding a line takes when this activity is chosen, answered once here
-   * instead of on every voucher. All three stay editable on the entry itself:
-   * a default is what is usually true, never a rule.
-   *
-   * The party sits here rather than on the ledger head because a head is too
-   * coarse to know — `5200 Salaries` serves the kurukkal, the melam group and
-   * the chef, while an activity is only ever one of them.
-   */
-  defaultFundId    Int?      @map("default_fund_id")
-  defaultProjectId Int?      @map("default_project_id")
-  defaultPartyId   Int?      @map("default_party_id")
-  isActive      Boolean      @default(true) @map("is_active")
-  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  id               Int          @id @default(autoincrement())
+  nameTa           String       @unique(map: "activities_name_ta_key") @map("name_ta")
+  nameEn           String?      @map("name_en")
+  kind             ActivityKind @default(general)
+  /// The coding a line takes when this activity is chosen. All four stay
+  /// editable on the entry itself: a default is what is usually true.
+  defaultFundId    Int?         @map("default_fund_id")
+  defaultProjectId Int?         @map("default_project_id")
+  defaultPartyId   Int?         @map("default_party_id")
+  /// The head this activity normally lands on. One column, not one per side:
+  /// `account.type` already says whether it suits a receipt or a payment.
+  defaultAccountId Int?         @map("default_account_id")
+  isActive         Boolean      @default(true) @map("is_active")
+  createdAt        DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
 
   defaultFund    Fund?    @relation(fields: [defaultFundId], references: [id])
   defaultProject Project? @relation(fields: [defaultProjectId], references: [id])
-  defaultParty   Party?   @relation(fields: [defaultPartyId], references: [id])
+  defaultParty   Party?   @relation("ActivityDefaultParty", fields: [defaultPartyId], references: [id])
+  defaultAccount Account? @relation("ActivityDefaultAccount", fields: [defaultAccountId], references: [id])
+
   eventTypes   EventType[]
   voucherLines VoucherLine[]
   ledgerLines  LedgerEntry[]
@@ -423,63 +521,8 @@ model Activity {
   @@index([defaultFundId], map: "activities_default_fund")
   @@index([defaultProjectId], map: "activities_default_project")
   @@index([defaultPartyId], map: "activities_default_party")
+  @@index([defaultAccountId], map: "activities_default_account")
   @@map("activities")
-}
-
-/*
- * A party: who an entry was with.
- *
- * The subsidiary ledger. People never become heads in the chart of accounts —
- * the chart says what kind of money moved, a party says who it moved with —
- * so one `5200 Salaries` head serves every kurukkal and melam player, and
- * "what did we pay him this year" is a grouping rather than another account.
- *
- * `userId` is set for anyone who also signs in, which is how a sponsor on the
- * calendar and a payer on a receipt are known to be the same person. A vendor
- * who will never log in simply has none.
- */
-model Party {
-  id        Int      @id @default(autoincrement())
-  nameTa    String   @map("name_ta")
-  nameEn    String?  @map("name_en")
-  userId    String?  @unique(map: "parties_user_id_key") @map("user_id") @db.Uuid
-  phone     String?
-  isActive  Boolean  @default(true) @map("is_active")
-  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  user                 User?              @relation(fields: [userId], references: [id])
-  roles                PartyRole[]
-  vouchers             Voucher[]
-  ledgerLines          LedgerEntry[]
-  defaultForActivities Activity[]
-  sponsorships         EventTypeSponsor[]
-  eventsSponsored      Event[]
-
-  @@index([isActive], map: "parties_active")
-  @@index([nameTa(ops: raw("gin_trgm_ops"))], map: "parties_name", type: Gin)
-  @@map("parties")
-}
-
-/*
- * What a party is to the temple, as a set rather than a single label.
- *
- * One person may sponsor the Friday abhishekam and sell the temple its flowers.
- * That is two roles of one party, not two parties — filing them separately
- * would split their history in half and leave no screen able to say what the
- * temple's dealings with them amount to.
- *
- * The role groups a list and nothing more. What an entry means is settled by
- * the account it is coded to, never by this.
- */
-model PartyRole {
-  partyId Int       @map("party_id")
-  kind    PartyKind
-
-  party Party @relation(fields: [partyId], references: [id], onDelete: Cascade)
-
-  @@id([partyId, kind])
-  @@index([kind], map: "party_roles_kind")
-  @@map("party_roles")
 }
 
 model BankAccount {
@@ -510,18 +553,14 @@ model Voucher {
   financialYearId Int           @map("financial_year_id")
   date            DateTime      @db.Date
   description     String
-  // The document total, summed from its lines. Stored rather than derived so
-  // a register of five thousand vouchers does not aggregate to list them.
   amount          Decimal       @db.Decimal(14, 2)
   mode            PaymentMode
   bankAccountId   Int?          @map("bank_account_id")
   chequeNo        String?       @map("cheque_no")
-  // Who the entry was with. On the header rather than the lines: a receipt has
-  // one payer even when it is split across three heads.
   partyId         Int?          @map("party_id")
-  // The name as it stood when the entry was made. Kept alongside partyId so a
-  // walk-in donor needs no record, and so a party later renamed or reassigned
-  // cannot rewrite what a posted receipt says.
+  /// The name as it stood when the entry was made. Kept alongside `partyId` so
+  /// a walk-in donor needs no record, and a later rename cannot rewrite a
+  /// posted receipt.
   party           String
   manualVoucherNo String?       @map("manual_voucher_no")
   status          VoucherStatus @default(Draft)
@@ -538,8 +577,8 @@ model Voucher {
   partyRef        Party?            @relation(fields: [partyId], references: [id])
   bankAccount     BankAccount?      @relation(fields: [bankAccountId], references: [id])
   lines           VoucherLine[]
-  createdByUser   User              @relation("VoucherCreatedBy", fields: [createdBy], references: [id])
-  decidedByUser   User?             @relation("VoucherDecidedBy", fields: [decidedBy], references: [id])
+  createdByUser   UserAccount       @relation("VoucherCreatedBy", fields: [createdBy], references: [id])
+  decidedByUser   UserAccount?      @relation("VoucherDecidedBy", fields: [decidedBy], references: [id])
   ledgerEntries   LedgerEntry[]
   sanththaPayment SanththaPayment?
 
@@ -552,20 +591,9 @@ model Voucher {
   @@map("vouchers")
 }
 
-/*
- * One head a voucher is coded to, and the amount going to it.
- *
- * A receipt for five thousand rupees of which two are earmarked for annadhanam
- * is one document with two lines — one reference, one signature, one piece of
- * paper — where before it could only be two vouchers pretending to be
- * unrelated.
- *
- * There is no debit/credit column here because a voucher is not a general
- * journal: every line of a receipt is a credit to income, every line of a
- * payment a debit to expenditure, and the side follows from `voucher.kind`.
- * The contra against cash or bank is generated at posting, split by fund so
- * each fund's cash balances within itself.
- */
+/// One head a voucher is coded to. No debit/credit column: every line of a
+/// receipt credits income and every line of a payment debits expenditure, which
+/// follows from `voucher.kind`.
 model VoucherLine {
   id         BigInt   @id @default(autoincrement())
   voucherId  BigInt   @map("voucher_id")
@@ -575,8 +603,6 @@ model VoucherLine {
   fundId     Int      @map("fund_id")
   projectId  Int?     @map("project_id")
   activityId Int?     @map("activity_id")
-  // The occurrence this line is for, where the activity alone is not precise
-  // enough — which Friday, not merely that it was a Friday abhishekam.
   eventId    Int?     @map("event_id")
 
   voucher  Voucher   @relation(fields: [voucherId], references: [id], onDelete: Cascade)
@@ -615,11 +641,11 @@ model LedgerEntry {
   accountId     Int      @map("account_id")
   fundId        Int      @map("fund_id")
   projectId     Int?     @map("project_id")
-  // Carried only on the income or expense line, never on its cash or bank
-  // contra. Both sides bearing the same activity would net to nil and every
-  // activity would report zero.
+  /// Carried only on the income or expense line, never on its cash or bank
+  /// contra. Both sides bearing these would net to nil.
   activityId    Int?     @map("activity_id")
   partyId       Int?     @map("party_id")
+  eventId       Int?     @map("event_id")
   debit         Decimal? @db.Decimal(14, 2)
   credit        Decimal? @db.Decimal(14, 2)
   bankAccountId Int?     @map("bank_account_id")
@@ -630,6 +656,7 @@ model LedgerEntry {
   project     Project?     @relation(fields: [projectId], references: [id])
   activity    Activity?    @relation(fields: [activityId], references: [id])
   party       Party?       @relation(fields: [partyId], references: [id])
+  event       Event?       @relation(fields: [eventId], references: [id])
   bankAccount BankAccount? @relation(fields: [bankAccountId], references: [id])
 
   @@unique([voucherId, lineNo], map: "voucher_line")
@@ -639,6 +666,7 @@ model LedgerEntry {
   @@index([bankAccountId], map: "ledger_entries_bank_account")
   @@index([activityId, date], map: "ledger_activity_date")
   @@index([partyId, date], map: "ledger_party_date")
+  @@index([eventId], map: "ledger_event")
   @@index([date], map: "ledger_date")
   @@map("ledger_entries")
 }
@@ -698,12 +726,13 @@ model EventType {
   nameEn        String?       @map("name_en")
   frequencyType FrequencyType @map("frequency_type")
   noOfInstances Int           @default(1) @map("no_of_instances") @db.SmallInt
+  /// `general` observances are funded by village collection and never carry a
+  /// named sponsor, which is what separates "no sponsor by design" from
+  /// "nobody assigned yet".
+  funding       EventFunding  @default(sponsored)
+  activityId    Int?          @map("activity_id")
   createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt     DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
-
-  // The activity a receipt for this pooja is coded to. The activity carries
-  // the fund in turn, so choosing the pooja settles both.
-  activityId Int? @map("activity_id")
 
   activity Activity? @relation(fields: [activityId], references: [id])
 
@@ -711,26 +740,16 @@ model EventType {
   sponsors EventTypeSponsor[]
 
   @@index([activityId], map: "event_types_activity")
+  @@index([funding], map: "event_types_funding")
   @@map("event_types")
 }
 
-/// A sponsor is a person registered against an event type. The instance is
-/// optional: leaving it null means they sponsor the type as a whole and are
-/// offered for any of its instances, rather than one particular slot.
-/*
- * One slot of a recurring observance — Week 12, or the மார்கழி occurrence.
- *
- * The structure of the temple year, fixed once and left alone. Sponsors attach
- * to a slot and a slot is dated afresh every year, so this is the row both of
- * those point at: the name of a slot is neither a property of whoever takes it
- * nor of the day it happens to land on, and holding it here is what stops the
- * same name being written on two tables with a rule deciding which wins.
- */
+/// One slot of a recurring observance — Week 12, or the மார்கழி occurrence.
+/// Dated afresh every year by its `Event` rows.
 model EventSlot {
   id                 Int     @id @default(autoincrement())
   eventTypeId        Int     @map("event_type_id")
   instanceIdentifier Int     @map("instance_identifier") @db.SmallInt
-  // The temple's own name for the slot — "மார்கழி மாதம்", "சப்பரம்".
   customInstanceName String? @map("custom_instance_name")
   isActive           Boolean @default(true) @map("is_active")
 
@@ -738,25 +757,12 @@ model EventSlot {
   sponsors  EventTypeSponsor[]
   events    Event[]
 
-  // The natural key, beside the surrogate id the other tables reference.
   @@unique([eventTypeId, instanceIdentifier], map: "one_slot_per_instance")
   @@map("event_slots")
 }
 
-/*
- * Who may take a slot — the arrangement, with no year attached.
- *
- * A shortlist, not an order: several devotees share one slot between them, and
- * which of them takes a given year is decided when that year is scheduled and
- * recorded on the occurrence. Storing a turn order here would be a second
- * opinion that drifts the first time a year is skipped or swapped.
- *
- * The slot is optional, and a null one is not "every slot". It is a registered
- * sponsor who has not been given an occurrence yet — the temple takes the name
- * first and settles which Friday it is later, so the pool of people waiting to
- * be placed is most of this table. The type is therefore what a sponsorship
- * always names; the slot is what it is eventually assigned.
- */
+/// Who may take a slot — the arrangement, with no year attached. A null slot is
+/// a registered sponsor not yet placed, not "every slot".
 model EventTypeSponsor {
   id          Int      @id @default(autoincrement())
   eventTypeId Int      @map("event_type_id")
@@ -768,64 +774,36 @@ model EventTypeSponsor {
   slot      EventSlot? @relation(fields: [slotId], references: [id], onDelete: Cascade)
   party     Party      @relation(fields: [partyId], references: [id])
 
-  // Postgres treats each null slot as distinct, so this cannot police the
-  // unassigned pool on its own; SponsorsService checks that case as well.
   @@unique([eventTypeId, slotId, partyId], map: "one_sponsor_per_slot")
   @@index([partyId], map: "sponsors_by_party")
   @@index([slotId], map: "sponsors_by_slot")
   @@map("event_type_sponsors")
 }
 
-/*
- * One dated occurrence of one slot — the part redrawn every year.
- *
- * Everything fixed lives on the slot; what changes each year is the date, the
- * time, and which of the slot's sponsors took it. That last one is why the
- * sponsor sits here and not on the slot: the slot knows all three names, only
- * the year knows which of them paid.
- */
+/// One dated occurrence of one slot. `sponsorPartyId` is null for a `general`
+/// event type, and for a `sponsored` one means nobody has been placed yet.
 model Event {
-  id                 Int       @id @default(autoincrement())
-  slotId             Int       @map("slot_id")
-  scheduledDate      DateTime  @map("scheduled_date") @db.Date
-  startTime          DateTime  @map("start_time") @db.Time(6)
-  endTime            DateTime? @map("end_time") @db.Time(6)
-  sponsorPartyId     Int?      @map("sponsor_party_id")
-  notes              String?
-  isCompleted        Boolean   @default(false) @map("is_completed")
-  createdAt          DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt          DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  id             Int       @id @default(autoincrement())
+  slotId         Int       @map("slot_id")
+  scheduledDate  DateTime  @map("scheduled_date") @db.Date
+  startTime      DateTime  @map("start_time") @db.Time(6)
+  endTime        DateTime? @map("end_time") @db.Time(6)
+  sponsorPartyId Int?      @map("sponsor_party_id")
+  notes          String?
+  isCompleted    Boolean   @default(false) @map("is_completed")
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   slot         EventSlot     @relation(fields: [slotId], references: [id])
   sponsor      Party?        @relation(fields: [sponsorPartyId], references: [id])
   voucherLines VoucherLine[]
+  ledgerLines  LedgerEntry[]
 
-  // The same slot on the same day twice is a duplicate, not a second pooja.
-  @@unique([slotId, scheduledDate], map: "one_occurrence_per_slot_day")
+  // `one_occurrence_per_slot_year` is an expression index and lives in the
+  // integrity migration; Prisma cannot express it.
   @@index([scheduledDate], map: "events_calendar")
   @@index([sponsorPartyId], map: "events_sponsor")
   @@map("events")
-}
-
-model SanththaPayment {
-  id               Int         @id @default(autoincrement())
-  userId           String      @map("user_id") @db.Uuid
-  year             Int
-  amount           Decimal     @db.Decimal(12, 2)
-  paidOn           DateTime    @map("paid_on") @db.Date
-  receiptVoucherId BigInt?     @unique(map: "one_payment_per_receipt") @map("receipt_voucher_id")
-  mode             PaymentMode
-  collectedBy      String      @map("collected_by") @db.Uuid
-  createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
-
-  user           User     @relation("SanththaPayer", fields: [userId], references: [id])
-  collectedByUser User    @relation("SanththaCollector", fields: [collectedBy], references: [id])
-  receiptVoucher Voucher? @relation(fields: [receiptVoucherId], references: [id])
-
-  @@unique([userId, year], map: "one_payment_per_member_per_year")
-  @@index([year], map: "payments_year")
-  @@index([userId], map: "payments_member")
-  @@map("sanththa_payments")
 }
 
 model AuditLog {
@@ -833,7 +811,7 @@ model AuditLog {
   at        DateTime    @default(now()) @db.Timestamptz(6)
   actorId   String?     @map("actor_id") @db.Uuid
   actorName String      @map("actor_name")
-  actorRole UserRole    @map("actor_role")
+  actorRole AccountRole @map("actor_role")
   action    AuditAction
   entity    String
   entityRef String?     @map("entity_ref")
@@ -841,7 +819,7 @@ model AuditLog {
   ipAddress String      @map("ip_address") @db.Inet
   diff      Json?
 
-  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+  actor UserAccount? @relation(fields: [actorId], references: [id], onDelete: SetNull)
 
   @@index([at(sort: Desc)], map: "audit_recent")
   @@index([actorId, at(sort: Desc)], map: "audit_actor")
@@ -876,7 +854,7 @@ model NotificationRecipient {
   dismissedAt    DateTime? @map("dismissed_at") @db.Timestamptz(6)
 
   notification Notification @relation(fields: [notificationId], references: [id], onDelete: Cascade)
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account      UserAccount  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@id([notificationId, userId])
   @@map("notification_recipients")
@@ -888,7 +866,7 @@ model Setting {
   updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
   updatedBy String?  @map("updated_by") @db.Uuid
 
-  updatedByUser User? @relation(fields: [updatedBy], references: [id])
+  updatedByAccount UserAccount? @relation(fields: [updatedBy], references: [id])
 
   @@map("settings")
 }

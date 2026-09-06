@@ -4,7 +4,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { Actor } from '../../common/decorators/actor.decorator';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import type { ActorContext } from '../../common/types/authenticated-user';
-import { UserRole } from '../../generated/prisma/enums';
+import { AccountRole } from '../../generated/prisma/enums';
 import { PermissionGroupDto, RoleDto, SetRolePermissionsDto } from './dto/role.dto';
 import { RolesService } from './roles.service';
 
@@ -28,14 +28,14 @@ export class RolesController {
   }
 
   @Get(':code')
-  findOne(@Param('code', new ParseEnumPipe(UserRole)) code: UserRole): Promise<RoleDto> {
+  findOne(@Param('code', new ParseEnumPipe(AccountRole)) code: AccountRole): Promise<RoleDto> {
     return this.roles.findOne(code);
   }
 
   @Put(':code/permissions')
   @ApiOperation({ summary: 'Replace the permissions granted to a role' })
   setPermissions(
-    @Param('code', new ParseEnumPipe(UserRole)) code: UserRole,
+    @Param('code', new ParseEnumPipe(AccountRole)) code: AccountRole,
     @Body() dto: SetRolePermissionsDto,
     @Actor() context: ActorContext,
   ): Promise<RoleDto> {

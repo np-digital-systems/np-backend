@@ -8,33 +8,27 @@ import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { LedgerQueryService, type Sides } from '../ledger/ledger-query.service';
 import { CreatePartyDto, PartyRecordDto, QueryPartiesDto, UpdatePartyDto } from './dto/party.dto';
 
-const PARTY_INCLUDE = { roles: true } satisfies Prisma.PartyInclude;
+const PARTY_INCLUDE = {
+  roles: true,
+  sponsor: { select: { partyId: true } },
+  account: { select: { id: true } },
+} satisfies Prisma.PartyInclude;
 
 type PartyRow = Prisma.PartyGetPayload<{ include: typeof PARTY_INCLUDE }>;
 
 const round = (value: number) => Math.round(value * 100) / 100;
 
-/*
- * Roles read in a fixed order rather than however the rows came back, so the
- * same party is described the same way on every screen it appears on.
- */
-const KIND_ORDER: PartyKind[] = [
-  PartyKind.sponsor,
-  PartyKind.staff,
-  PartyKind.vendor,
-  PartyKind.devotee,
-];
+const KIND_ORDER: PartyKind[] = [PartyKind.devotee, PartyKind.vendor, PartyKind.staff];
 
 function kindsOf(party: PartyRow): PartyKind[] {
   return KIND_ORDER.filter((kind) => party.roles.some((role) => role.kind === kind));
 }
 
 /**
- * Parties — who an entry was with.
- *
- * The subsidiary ledger under the chart of accounts. People are never heads:
- * one `5200 Salaries` serves every kurukkal, and "what did we pay him" is a
- * grouping over this dimension rather than an account per person.
+ * Parties — the register of everyone the temple deals with, and the only place
+ * a name is stored. People are never heads in the chart of accounts: one
+ * `5200 Salaries` serves every kurukkal, and "what did we pay him" is a
+ * grouping over this dimension.
  */
 @Injectable()
 export class PartiesService {
@@ -46,21 +40,8 @@ export class PartiesService {
 
   async findMany(query: QueryPartiesDto): Promise<PartyRecordDto[]> {
     const parties = await this.prisma.party.findMany({
-      where: {
-        // `some` rather than an equality: a florist who also sponsors a pooja
-        // belongs in both lists, and is the same record in each.
-        roles: query.kind ? { some: { kind: query.kind } } : undefined,
-        isActive: query.isActive,
-        OR: query.search
-          ? [
-              { nameTa: { contains: query.search, mode: 'insensitive' } },
-              { nameEn: { contains: query.search, mode: 'insensitive' } },
-            ]
-          : undefined,
-      },
+      where: this.whereFrom(query),
       include: PARTY_INCLUDE,
-      // A party no longer has one kind to sort by. The name is the only order
-      // that stays stable as roles are added and dropped.
       orderBy: { nameTa: 'asc' },
     });
 
@@ -70,10 +51,7 @@ export class PartiesService {
   }
 
   async findOneOrFail(id: number, financialYearId?: number): Promise<PartyRecordDto> {
-    const party = await this.prisma.party.findUnique({
-      where: { id },
-      include: PARTY_INCLUDE,
-    });
+    const party = await this.prisma.party.findUnique({ where: { id }, include: PARTY_INCLUDE });
 
     if (!party) throw new NotFoundException(`Party ${id} was not found`);
 
@@ -83,16 +61,18 @@ export class PartiesService {
   }
 
   async create(dto: CreatePartyDto, context: ActorContext): Promise<PartyRecordDto> {
-    await this.assertUserIsFree(dto.userId ?? null, null);
-
-    const roles = dto.roles ?? [PartyKind.devotee];
+    const roles = dto.roles ?? [];
 
     const party = await this.prisma.party.create({
       data: {
+        type: dto.type,
         nameTa: dto.nameTa,
-        nameEn: dto.nameEn,
-        userId: dto.userId ?? null,
+        nameEn: dto.nameEn ?? null,
         phone: dto.phone ?? null,
+        email: dto.email ?? null,
+        address: dto.address ?? null,
+        referenceNo: dto.referenceNo ?? null,
+        notes: dto.notes ?? null,
         roles: { create: roles.map((kind) => ({ kind })) },
       },
       include: PARTY_INCLUDE,
@@ -102,34 +82,33 @@ export class PartiesService {
       action: 'create',
       entity: 'party',
       entityRef: String(party.id),
-      summary: `Added ${party.nameTa} as ${roles.join(', ')}`,
+      summary: roles.length
+        ? `Added ${party.nameTa} as ${roles.join(', ')}`
+        : `Added ${party.nameTa}`,
     });
 
     return this.findOneOrFail(party.id);
   }
 
   async update(id: number, dto: UpdatePartyDto, context: ActorContext): Promise<PartyRecordDto> {
-    const before = await this.prisma.party.findUnique({
-      where: { id },
-      include: PARTY_INCLUDE,
-    });
+    const before = await this.prisma.party.findUnique({ where: { id }, include: PARTY_INCLUDE });
 
     if (!before) throw new NotFoundException(`Party ${id} was not found`);
 
-    if (dto.userId !== undefined) await this.assertUserIsFree(dto.userId ?? null, id);
-    if (dto.isActive === false) await this.assertNothingDependsOnIt(id, before.nameTa);
-    if (dto.roles) await this.assertRolesStillCovered(before, dto.roles);
+    if (dto.isActive === false) await this.assertNothingDependsOnIt(before);
 
     const party = await this.prisma.party.update({
       where: { id },
       data: {
+        type: dto.type,
         nameTa: dto.nameTa,
         nameEn: dto.nameEn,
-        userId: dto.userId,
         phone: dto.phone,
+        email: dto.email,
+        address: dto.address,
+        referenceNo: dto.referenceNo,
+        notes: dto.notes,
         isActive: dto.isActive,
-        // Replaced wholesale rather than reconciled: a role set is what the
-        // party is now, and a row carries nothing but the pair that names it.
         ...(dto.roles
           ? { roles: { deleteMany: {}, create: dto.roles.map((kind) => ({ kind })) } }
           : {}),
@@ -155,81 +134,47 @@ export class PartiesService {
     return this.update(id, { isActive: false }, context);
   }
 
-  /**
-   * Give an existing party a sign-in.
-   *
-   * The relationship runs this way round, not the other. A party is registered
-   * the moment the temple deals with them — a sponsor, a florist, the
-   * electricity board — and only some of them ever need an account. Minting a
-   * party from a user instead would ask for a login before anyone wanted one,
-   * which is what forced every sponsor to become a user in the first place.
-   */
-  async linkUser(id: number, userId: string, context: ActorContext): Promise<PartyRecordDto> {
-    await this.assertUserIsFree(userId, id);
-
-    const party = await this.prisma.party.update({
-      where: { id },
-      data: { userId },
-      include: PARTY_INCLUDE,
-    });
-
-    await this.audit.record(context, {
-      action: 'update',
-      entity: 'party',
-      entityRef: String(id),
-      summary: `Linked ${party.nameTa} to a sign-in`,
-    });
-
-    return this.findOneOrFail(id);
-  }
-
-  private async assertUserIsFree(userId: string | null, exceptPartyId: number | null) {
-    if (userId === null) return;
-
-    const user = await this.prisma.user.findUnique({ where: { id: userId } });
-
-    if (!user) throw new NotFoundException(`User ${userId} was not found`);
-
-    const taken = await this.prisma.party.findUnique({ where: { userId } });
-
-    if (taken && taken.id !== exceptPartyId) {
-      throw new ConflictException(`${taken.nameTa} already stands for that person`);
-    }
+  private whereFrom(query: QueryPartiesDto): Prisma.PartyWhereInput {
+    return {
+      // `some` rather than equality: a florist who also sponsors belongs in
+      // both lists, and is the same record in each.
+      roles: query.kind ? { some: { kind: query.kind } } : undefined,
+      type: query.type,
+      sponsor: query.sponsorsOnly ? { isNot: null } : undefined,
+      isActive: query.isActive,
+      OR: query.search
+        ? [
+            { nameTa: { contains: query.search, mode: 'insensitive' } },
+            { nameEn: { contains: query.search, mode: 'insensitive' } },
+            { referenceNo: { contains: query.search, mode: 'insensitive' } },
+          ]
+        : undefined,
+    };
   }
 
   /*
    * Deactivating hides a party from the pickers; it never touches the entries
-   * that name it. What it must not do is leave an activity offering somebody
-   * who can no longer be chosen.
+   * that name it. What it must not do is leave a screen offering somebody who
+   * can no longer be chosen.
    */
-  private async assertNothingDependsOnIt(id: number, nameTa: string): Promise<void> {
-    const activities = await this.prisma.activity.count({ where: { defaultPartyId: id } });
-
-    if (activities > 0) {
-      throw new ConflictException(
-        `${nameTa} is still the default party on ${activities} activity(ies); clear those first`,
-      );
-    }
-  }
-
-  /*
-   * A role may be dropped freely except where the calendar still leans on it.
-   * Removing `sponsor` from someone with standing assignments would leave those
-   * rows naming a party the sponsor picker can no longer offer.
-   */
-  private async assertRolesStillCovered(party: PartyRow, roles: PartyKind[]): Promise<void> {
-    const heldSponsor = party.roles.some((role) => role.kind === PartyKind.sponsor);
-
-    if (!heldSponsor || roles.includes(PartyKind.sponsor)) return;
-
-    const [standing, occurrences] = await Promise.all([
+  private async assertNothingDependsOnIt(party: PartyRow): Promise<void> {
+    const [activities, accounts, standing, occurrences] = await Promise.all([
+      this.prisma.activity.count({ where: { defaultPartyId: party.id } }),
+      this.prisma.account.count({ where: { defaultPartyId: party.id } }),
       this.prisma.eventTypeSponsor.count({ where: { partyId: party.id } }),
-      this.prisma.event.count({ where: { sponsorPartyId: party.id } }),
+      this.prisma.event.count({ where: { sponsorPartyId: party.id, isCompleted: false } }),
     ]);
 
-    if (standing + occurrences > 0) {
+    const blockers = [
+      activities && `${activities} activity default(s)`,
+      accounts && `${accounts} account default(s)`,
+      standing && `${standing} standing sponsorship(s)`,
+      occurrences && `${occurrences} upcoming occurrence(s)`,
+    ].filter(Boolean);
+
+    if (blockers.length > 0) {
       throw new ConflictException(
-        `${party.nameTa} still sponsors ${standing} standing assignment(s) and ${occurrences} occurrence(s); clear those before dropping the sponsor role`,
+        `${party.nameTa} is still referenced by ${blockers.join(', ')}; clear those first`,
       );
     }
   }
@@ -243,11 +188,17 @@ export class PartiesService {
 
     return {
       id: party.id,
+      type: party.type,
       name: party.nameTa,
       nameEn: party.nameEn ?? '',
       roles: kindsOf(party),
-      userId: party.userId,
+      isSponsor: party.sponsor !== null,
+      accountId: party.account?.id ?? null,
       phone: party.phone,
+      email: party.email,
+      address: party.address,
+      referenceNo: party.referenceNo,
+      notes: party.notes,
       isActive: party.isActive,
       entryCount,
       contributed: round(income ? income.credit - income.debit : 0),
