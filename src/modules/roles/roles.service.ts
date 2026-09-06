@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 
 import { ActorContext } from '../../common/types/authenticated-user';
-import { UserRole } from '../../generated/prisma/enums';
+import { AccountRole } from '../../generated/prisma/enums';
 import { AuditAction } from '../../generated/prisma/enums';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
@@ -22,7 +22,11 @@ export class RolesService {
         orderBy: { sortOrder: 'asc' },
         include: { permissions: { select: { permissionCode: true } } },
       }),
-      this.prisma.user.groupBy({ by: ['role'], where: { isActive: true }, _count: { _all: true } }),
+      this.prisma.userAccount.groupBy({
+        by: ['role'],
+        where: { isActive: true },
+        _count: { _all: true },
+      }),
     ]);
 
     const byRole = new Map(counts.map((row) => [row.role, row._count._all]));
@@ -37,7 +41,7 @@ export class RolesService {
     }));
   }
 
-  async findOne(code: UserRole): Promise<RoleDto> {
+  async findOne(code: AccountRole): Promise<RoleDto> {
     const role = (await this.findAll()).find((entry) => entry.code === code);
 
     if (!role) throw new NotFoundException(`Role ${code} was not found`);
@@ -64,7 +68,7 @@ export class RolesService {
   }
 
   async setPermissions(
-    code: UserRole,
+    code: AccountRole,
     dto: SetRolePermissionsDto,
     context: ActorContext,
   ): Promise<RoleDto> {
@@ -85,7 +89,7 @@ export class RolesService {
 
     const KEYS_TO_THE_BUILDING = ['role:manage', 'user:manage'];
 
-    if (code === UserRole.admin) {
+    if (code === AccountRole.admin) {
       const dropped = KEYS_TO_THE_BUILDING.filter((key) => !dto.permissions.includes(key));
 
       if (dropped.length > 0) {
