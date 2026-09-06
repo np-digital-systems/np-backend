@@ -103,8 +103,19 @@ const ACCOUNTANT = [
   'contribution:view', 'contribution:record', 'contribution:manage',
 ];
 
+/*
+ * A cashier raises vouchers, so they can read what a voucher is coded to.
+ *
+ * The four view permissions below are not extra reach — they are the pickers
+ * on the voucher form. Raising a receipt means naming a ledger head, the fund
+ * it is held in, sometimes a project, and the bank account it moved through;
+ * without them the screen cannot even load its options, which is what a
+ * cashier saw as "Something went wrong". None of the matching `:manage`
+ * permissions is granted, so this stays read-only.
+ */
 const CASHIER = [
   'dashboard:view',
+  'account:view', 'fund:view', 'project:view', 'bank-account:view',
   'activity:view', 'party:view',
   'transaction:view', 'transaction:create',
   'receipt-voucher:view', 'receipt-voucher:create',
