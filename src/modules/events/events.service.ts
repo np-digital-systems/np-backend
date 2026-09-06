@@ -5,13 +5,16 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 
+import { toRupees } from '../../common/money/money';
 import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
+import { PartyKind, VoucherStatus } from '../../generated/prisma/enums';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { describeInstance } from '../sponsors/instance-label';
 import { SponsorPartyDto } from '../sponsors/dto/sponsor.dto';
 import {
+  ContributorDto,
   CreateEventDto,
   EventRecordDto,
   EventsSummaryDto,
@@ -85,6 +88,139 @@ export class EventsService {
     if (!event) throw new NotFoundException(`Event ${id} was not found`);
 
     return this.toRecord(event, canSeeContact);
+  }
+
+  /**
+   * Everyone worth offering on a collection sheet for one occurrence.
+   *
+   * "Contributor" is not a role and is never stored: it is computed from what
+   * people actually gave to earlier occurrences of the same slot. Sponsors,
+   * vendors and devotees follow behind, so a name typed for the first time is
+   * still one search away.
+   */
+  async contributors(eventId: number, canSeeContact: boolean): Promise<ContributorDto[]> {
+    const event = await this.prisma.event.findUnique({
+      where: { id: eventId },
+      select: { id: true, slotId: true },
+    });
+
+    if (!event) throw new NotFoundException(`Event ${eventId} was not found`);
+
+    const [gave, alreadyGiven, roles] = await Promise.all([
+      // Earlier years of this same slot, through the lines rather than the
+      // ledger so a draft receipt does not count as money in.
+      this.prisma.voucherLine.findMany({
+        where: {
+          event: { slotId: event.slotId, id: { not: eventId } },
+          voucher: { status: VoucherStatus.Posted, partyId: { not: null } },
+        },
+        select: {
+          amount: true,
+          voucher: { select: { partyId: true, date: true } },
+        },
+      }),
+      this.prisma.voucherLine.findMany({
+        where: {
+          eventId,
+          voucher: { status: { not: VoucherStatus.Cancelled }, partyId: { not: null } },
+        },
+        select: { amount: true, voucher: { select: { partyId: true } } },
+      }),
+      this.prisma.party.findMany({
+        where: {
+          isActive: true,
+          OR: [{ sponsor: { isNot: null } }, { roles: { some: {} } }],
+        },
+        select: {
+          id: true,
+          nameTa: true,
+          nameEn: true,
+          phone: true,
+          roles: { select: { kind: true } },
+          sponsor: { select: { partyId: true } },
+        },
+        orderBy: { nameTa: 'asc' },
+      }),
+    ]);
+
+    const paid = new Map<number, number>();
+    for (const line of alreadyGiven) {
+      const partyId = line.voucher.partyId!;
+      paid.set(partyId, (paid.get(partyId) ?? 0) + toRupees(line.amount));
+    }
+
+    // Their most recent gift, not their first: what they gave last time is the
+    // figure a collector wants prefilled.
+    const history = new Map<number, { amount: number; year: number }>();
+    for (const line of gave) {
+      const partyId = line.voucher.partyId!;
+      const year = line.voucher.date.getUTCFullYear();
+      const previous = history.get(partyId);
+
+      if (!previous || year > previous.year) {
+        history.set(partyId, { amount: toRupees(line.amount), year });
+      }
+    }
+
+    const byId = new Map(roles.map((party) => [party.id, party]));
+
+    // Anyone in the history who no longer holds a role still belongs on the
+    // sheet -- they gave last year, which is the strongest reason of all.
+    const missing = [...history.keys()].filter((id) => !byId.has(id));
+
+    if (missing.length > 0) {
+      const extra = await this.prisma.party.findMany({
+        where: { id: { in: missing } },
+        select: {
+          id: true,
+          nameTa: true,
+          nameEn: true,
+          phone: true,
+          roles: { select: { kind: true } },
+          sponsor: { select: { partyId: true } },
+        },
+      });
+
+      for (const party of extra) byId.set(party.id, party);
+    }
+
+    const rows = [...byId.values()].map((party) => {
+      const previous = history.get(party.id);
+      const reason: ContributorDto['reason'] = previous
+        ? 'gave-before'
+        : party.sponsor
+          ? 'sponsor'
+          : party.roles.some((role) => role.kind === PartyKind.vendor)
+            ? 'vendor'
+            : 'devotee';
+
+      return {
+        partyId: party.id,
+        name: party.nameTa,
+        nameEn: party.nameEn,
+        phone: canSeeContact ? party.phone : null,
+        reason,
+        lastAmount: previous?.amount ?? null,
+        lastYear: previous?.year ?? null,
+        paidThisTime: paid.has(party.id),
+        paidAmount: paid.get(party.id) ?? null,
+      };
+    });
+
+    // Those who gave before lead, biggest first; the rest fall in by name.
+    const ORDER: Record<ContributorDto['reason'], number> = {
+      'gave-before': 0,
+      sponsor: 1,
+      vendor: 2,
+      devotee: 3,
+    };
+
+    return rows.sort(
+      (a, b) =>
+        ORDER[a.reason] - ORDER[b.reason] ||
+        (b.lastAmount ?? 0) - (a.lastAmount ?? 0) ||
+        a.name.localeCompare(b.name),
+    );
   }
 
   async summary(year = new Date().getFullYear()): Promise<EventsSummaryDto> {
@@ -514,6 +650,7 @@ export class EventsService {
       name: type.nameTa,
       nameEn: type.nameEn ?? '',
       frequencyType: type.frequencyType,
+      funding: type.funding,
       noOfInstances: type.noOfInstances,
       activityId: type.activityId,
       createdAt: type.createdAt,

@@ -164,6 +164,7 @@ export class EventTypesService {
         nameEn: dto.nameEn,
         frequencyType: dto.frequencyType,
         noOfInstances: dto.noOfInstances,
+        funding: dto.funding,
         activityId: dto.activityId ?? null,
         slots: {
           create: Array.from({ length: dto.noOfInstances }, (_, index) => ({
@@ -207,6 +208,7 @@ export class EventTypesService {
         nameEn: dto.nameEn,
         frequencyType: dto.frequencyType,
         noOfInstances: dto.noOfInstances,
+        funding: dto.funding,
         activityId,
       },
     });
@@ -335,6 +337,7 @@ export class EventTypesService {
       nameEn: type.nameEn ?? '',
       frequencyType: type.frequencyType,
       noOfInstances: type.noOfInstances,
+      funding: type.funding,
       activityId: type.activityId,
       createdAt: type.createdAt,
       updatedAt: type.updatedAt,

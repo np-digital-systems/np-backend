@@ -20,6 +20,7 @@ import type { ActorContext, AuthenticatedUser } from '../../common/types/authent
 import { PermissionsService } from '../auth/permissions.service';
 import {
   CreateEventDto,
+  ContributorDto,
   EventRecordDto,
   EventsSummaryDto,
   QueryEventsDto,
@@ -79,6 +80,20 @@ export class EventsController {
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<EventRecordDto> {
     return this.events.findOneOrFail(id, await this.canSeeContact(user));
+  }
+
+  @Get(':id/contributors')
+  @RequirePermissions('transaction:create')
+  @ApiOperation({
+    summary: 'Who to offer on a collection sheet for this occurrence',
+    description:
+      'Everyone who gave to an earlier year of the same slot, then sponsors, vendors and devotees. Contributor is computed, never stored.',
+  })
+  async contributors(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<ContributorDto[]> {
+    return this.events.contributors(id, await this.canSeeContact(user));
   }
 
   @Post()
