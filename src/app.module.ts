@@ -36,7 +36,7 @@ import { SearchModule } from './modules/search/search.module';
 import { SettingsModule } from './modules/settings/settings.module';
 import { VouchersModule } from './modules/vouchers/vouchers.module';
 import { SponsorsModule } from './modules/sponsors/sponsors.module';
-import { UsersModule } from './modules/users/users.module';
+import { UserAccountsModule } from './modules/user-accounts/user-accounts.module';
 
 /**
  * Readable logs when someone is watching, plain JSON when nobody is.
@@ -110,7 +110,7 @@ function prettyTransport(
     AuditModule,
     HealthModule,
     AuthModule,
-    UsersModule,
+    UserAccountsModule,
     RolesModule,
     SponsorsModule,
     SettingsModule,
