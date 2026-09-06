@@ -10,7 +10,7 @@ import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
-import { PartyKind } from '../../generated/prisma/enums';
+import { EventFunding, PartyType } from '../../generated/prisma/enums';
 import {
   CreateSponsorDto,
   QueryDirectoryDto,
@@ -21,18 +21,16 @@ import {
 } from './dto/sponsor.dto';
 import { describeInstance } from './instance-label';
 
-/*
- * Email and address live on the sign-in rather than the party, so they are
- * read through the link where there is one. A sponsor who never signs in has
- * a name and a phone number, which is all the temple ever had for them.
- */
+/** Contact detail lives on the party; the sign-in, where there is one, is only an id. */
 const SPONSOR_SELECT = {
   id: true,
   nameTa: true,
   nameEn: true,
   phone: true,
-  userId: true,
-  user: { select: { email: true, address: true } },
+  email: true,
+  address: true,
+  account: { select: { id: true } },
+  sponsor: { select: { sponsorNo: true } },
 } satisfies Prisma.PartySelect;
 
 type SponsorRow = Prisma.PartyGetPayload<{ select: typeof SPONSOR_SELECT }>;
@@ -58,7 +56,7 @@ interface OccurrenceCounts {
 const NO_OCCURRENCES: OccurrenceCounts = { bySlot: new Map(), byType: new Map() };
 
 @Injectable()
-export class SponsorsService {
+export class EventSponsorsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
@@ -155,13 +153,9 @@ export class SponsorsService {
     await this.assertNotDuplicate(dto.eventTypeId, slotId, dto.partyId);
 
     const created = await this.prisma.$transaction(async (tx) => {
-      // Sponsoring something is what makes a party a sponsor. Granting the role
-      // here is what lets the picker offer the temple's florist for next
-      // Friday's pooja without anyone registering them a second time.
-      await tx.partyRole.createMany({
-        data: [{ partyId: dto.partyId, kind: PartyKind.sponsor }],
-        skipDuplicates: true,
-      });
+      // Sponsoring something is what makes a party a sponsor, so the profile is
+      // opened here rather than demanded beforehand.
+      await this.ensureSponsorProfile(tx, dto.partyId);
 
       return tx.eventTypeSponsor.create({
         data: { eventTypeId: dto.eventTypeId, slotId, partyId: dto.partyId },
@@ -210,10 +204,7 @@ export class SponsorsService {
     await this.assertNotDuplicate(eventTypeId, slotId, partyId, id);
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.partyRole.createMany({
-        data: [{ partyId, kind: PartyKind.sponsor }],
-        skipDuplicates: true,
-      });
+      await this.ensureSponsorProfile(tx, partyId);
 
       return tx.eventTypeSponsor.update({
         where: { id },
@@ -270,6 +261,12 @@ export class SponsorsService {
 
     if (!eventType) throw new NotFoundException(`Event type ${eventTypeId} was not found`);
 
+    if (eventType.funding === EventFunding.general) {
+      throw new BadRequestException(
+        `${eventType.nameTa} is funded by collection and takes no registered sponsors`,
+      );
+    }
+
     if (instanceIdentifier == null) return null;
 
     const slot = await this.prisma.eventSlot.findUnique({
@@ -314,14 +311,27 @@ export class SponsorsService {
     }
   }
 
+  /** A sponsor profile is the sponsor role; opening one is idempotent. */
+  private async ensureSponsorProfile(tx: Prisma.TransactionClient, partyId: number): Promise<void> {
+    await tx.sponsor.upsert({
+      where: { partyId },
+      create: { partyId, sponsorNo: '', sponsorSince: new Date() },
+      update: {},
+      select: { partyId: true },
+    });
+  }
+
   private async assertPartyIsUsable(partyId: number): Promise<void> {
     const party = await this.prisma.party.findUnique({
       where: { id: partyId },
-      select: { isActive: true, nameTa: true },
+      select: { isActive: true, nameTa: true, type: true },
     });
 
     if (!party) throw new NotFoundException(`Party ${partyId} was not found`);
     if (!party.isActive) throw new BadRequestException(`${party.nameTa} is retired`);
+    if (party.type !== PartyType.person) {
+      throw new BadRequestException(`${party.nameTa} is an organisation and cannot sponsor`);
+    }
   }
 
   /**
@@ -404,10 +414,11 @@ export class SponsorsService {
       id: row.id,
       name: row.nameTa,
       nameEn: row.nameEn ?? '',
-      email: canSeeContact ? (row.user?.email ?? null) : null,
+      email: canSeeContact ? row.email : null,
       phone: canSeeContact ? row.phone : null,
-      address: row.user?.address ?? '',
-      userId: row.userId,
+      address: row.address ?? '',
+      sponsorNo: row.sponsor?.sponsorNo ?? null,
+      accountId: row.account?.id ?? null,
     };
   }
 

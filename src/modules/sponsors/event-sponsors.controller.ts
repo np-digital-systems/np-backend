@@ -27,16 +27,16 @@ import {
   SponsorPartyDto,
   UpdateSponsorDto,
 } from './dto/sponsor.dto';
-import { SponsorsService } from './sponsors.service';
+import { EventSponsorsService } from './event-sponsors.service';
 
 const MANAGE = 'event-sponsor:manage';
 
-@ApiTags('sponsors')
+@ApiTags('event-sponsors')
 @ApiBearerAuth()
-@Controller('sponsors')
-export class SponsorsController {
+@Controller('event-sponsors')
+export class EventSponsorsController {
   constructor(
-    private readonly sponsors: SponsorsService,
+    private readonly sponsors: EventSponsorsService,
     private readonly permissions: PermissionsService,
   ) {}
 
