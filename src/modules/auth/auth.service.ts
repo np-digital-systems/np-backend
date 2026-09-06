@@ -60,7 +60,7 @@ export class AuthService {
 
     if (!account) throw new UnauthorizedException('This account no longer exists');
 
-    const { permissions, ...identity } = this.toAuthUser(account, []);
+    const { permissions: _ignored, ...identity } = this.toAuthUser(account, []);
 
     return identity;
   }
