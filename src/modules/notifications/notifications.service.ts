@@ -4,7 +4,7 @@ import { PageDto, PageMetaDto } from '../../common/dto/page.dto';
 import { NotificationCategoryWire } from '../../common/enums/wire';
 import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
-import { NotificationPriority, UserRole } from '../../generated/prisma/enums';
+import { NotificationPriority, AccountRole } from '../../generated/prisma/enums';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import {
   CreateNotificationDto,
@@ -18,7 +18,7 @@ const RECIPIENT_INCLUDE = { notification: true } satisfies Prisma.NotificationRe
 
 type RecipientRow = Prisma.NotificationRecipientGetPayload<{ include: typeof RECIPIENT_INCLUDE }>;
 
-const STAFF_ROLES: UserRole[] = [UserRole.admin, UserRole.accountant, UserRole.cashier];
+const STAFF_ROLES: AccountRole[] = [AccountRole.admin, AccountRole.accountant, AccountRole.cashier];
 
 @Injectable()
 export class NotificationsService {
@@ -112,9 +112,9 @@ export class NotificationsService {
    * somebody who joins tomorrow does not inherit today's alerts.
    */
   async publish(dto: CreateNotificationDto): Promise<NotificationDto> {
-    const roles = (dto.roles?.length ? dto.roles : STAFF_ROLES) as UserRole[];
+    const roles = (dto.roles?.length ? dto.roles : STAFF_ROLES) as AccountRole[];
 
-    const audience = await this.prisma.user.findMany({
+    const audience = await this.prisma.userAccount.findMany({
       where: { isActive: true, role: { in: roles } },
       select: { id: true },
     });

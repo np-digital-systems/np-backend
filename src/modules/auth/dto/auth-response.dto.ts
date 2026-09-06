@@ -1,13 +1,14 @@
 import { ApiProperty } from '@nestjs/swagger';
 
-import { UserRole } from '../../../generated/prisma/enums';
+import { AccountRole } from '../../../generated/prisma/enums';
 
 export class AuthUserDto {
   @ApiProperty() id!: string;
-  @ApiProperty() nameTa!: string;
-  @ApiProperty({ nullable: true }) fullName!: string | null;
-  @ApiProperty({ nullable: true }) email!: string | null;
-  @ApiProperty({ enum: UserRole }) role!: UserRole;
+  @ApiProperty({ description: 'The name on the party this sign-in belongs to' })
+  nameTa!: string;
+  @ApiProperty({ nullable: true }) nameEn!: string | null;
+  @ApiProperty() email!: string;
+  @ApiProperty({ enum: AccountRole }) role!: AccountRole;
   @ApiProperty({ isArray: true, type: String }) permissions!: string[];
 }
 

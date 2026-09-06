@@ -48,7 +48,7 @@ describe('API (e2e)', () => {
   });
 
   it('rejects unauthenticated access to a protected route', async () => {
-    await request(server).get('/api/users').expect(401);
+    await request(server).get('/api/user-accounts').expect(401);
   });
 
   it('rejects malformed credentials before touching the database', async () => {

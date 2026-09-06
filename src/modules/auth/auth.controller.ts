@@ -25,14 +25,12 @@ import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { SessionDto } from './dto/session.dto';
 import { PermissionsService } from './permissions.service';
-import { UsersService } from '../users/users.service';
 
 @ApiTags('auth')
 @Controller('auth')
 export class AuthController {
   constructor(
     private readonly auth: AuthService,
-    private readonly users: UsersService,
     private readonly permissions: PermissionsService,
   ) {}
 
@@ -101,19 +99,12 @@ export class AuthController {
   @Get('me')
   @ApiOperation({ summary: 'Return the signed-in user and their effective permissions' })
   async me(@CurrentUser() user: AuthenticatedUser): Promise<AuthUserDto> {
-    const [profile, permissions] = await Promise.all([
-      this.users.findByIdOrFail(user.id),
+    const [account, permissions] = await Promise.all([
+      this.auth.identityOrFail(user.id),
       this.permissions.forRole(user.role),
     ]);
 
-    return {
-      id: profile.id,
-      nameTa: profile.nameTa,
-      fullName: profile.fullName,
-      email: profile.email,
-      role: profile.role,
-      permissions: [...permissions],
-    };
+    return { ...account, permissions: [...permissions] };
   }
 
   private contextOf(request: FastifyRequest): { ipAddress: string; userAgent: string } {

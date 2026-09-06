@@ -36,8 +36,8 @@ const VOUCHER_INCLUDE = {
     orderBy: { lineNo: 'asc' },
   },
   bankAccount: true,
-  createdByUser: { select: { id: true, nameTa: true, fullName: true } },
-  decidedByUser: { select: { id: true, nameTa: true, fullName: true } },
+  createdByUser: { select: { id: true, party: { select: { nameTa: true, nameEn: true } } } },
+  decidedByUser: { select: { id: true, party: { select: { nameTa: true, nameEn: true } } } },
 } satisfies Prisma.VoucherInclude;
 
 type VoucherRow = Prisma.VoucherGetPayload<{ include: typeof VOUCHER_INCLUDE }>;
@@ -360,6 +360,7 @@ export class VouchersService {
         fundId: line.fundId,
         projectId: line.projectId,
         activityId: line.activityId,
+        eventId: line.eventId,
       })),
       contraAccountId,
       bankAccountId: voucher.bankAccountId,
@@ -375,6 +376,7 @@ export class VouchersService {
           fundId: line.fundId,
           projectId: line.projectId,
           activityId: line.activityId,
+          eventId: line.eventId,
           // The party belongs to the document, so it rides every coding line
           // and none of the contra. Both sides would net it to nil.
           partyId: line.isCoding ? voucher.partyId : null,
@@ -578,8 +580,9 @@ export class VouchersService {
   }
 
   private toRecord(voucher: VoucherRow): VoucherRecordDto {
-    const actor = (user: { id: string; nameTa: string; fullName: string | null } | null) =>
-      user ? { id: user.id, name: user.fullName ?? user.nameTa } : null;
+    const actor = (
+      user: { id: string; party: { nameTa: string; nameEn: string | null } } | null,
+    ) => (user ? { id: user.id, name: user.party.nameEn ?? user.party.nameTa } : null);
 
     return {
       id: Number(voucher.id),

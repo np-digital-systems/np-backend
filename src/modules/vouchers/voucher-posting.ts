@@ -8,6 +8,7 @@ export interface PostingLine {
   fundId: number;
   projectId: number | null;
   activityId: number | null;
+  eventId: number | null;
   bankAccountId: number | null;
   /** A coding line, as opposed to the cash or bank contra it is balanced by. */
   isCoding: boolean;
@@ -20,6 +21,7 @@ export interface CodingLine {
   fundId: number;
   projectId: number | null;
   activityId: number | null;
+  eventId: number | null;
 }
 
 export interface PostingInput {
@@ -46,8 +48,9 @@ const round = (value: number) => Math.round(value * 100) / 100;
  * still balance the voucher while leaving the books unable to say how much
  * cash belongs to a restricted fund, which is the whole reason it is restricted.
  *
- * Analytical dimensions ride only on the coding lines. Carried on the contra as
- * well, an activity would appear on both sides of every entry and net to nil.
+ * Analytical dimensions — activity, event, party — ride only on the coding
+ * lines. Carried on the contra as well, each would appear on both sides of
+ * every entry and net to nil.
  *
  * Only the contra carries `bankAccountId`, which is what lets the bank book be
  * a filter over the ledger rather than a parallel list that can drift.
@@ -72,6 +75,7 @@ export function buildPostingLines(input: PostingInput): PostingLine[] {
     fundId,
     projectId: null,
     activityId: null,
+    eventId: null,
     bankAccountId,
     isCoding: false,
   }));
@@ -84,6 +88,7 @@ export function buildPostingLines(input: PostingInput): PostingLine[] {
     fundId: line.fundId,
     projectId: line.projectId,
     activityId: line.activityId,
+    eventId: line.eventId,
     bankAccountId: null,
     isCoding: true,
   }));

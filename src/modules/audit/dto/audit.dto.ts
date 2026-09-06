@@ -3,7 +3,7 @@ import { IsDateString, IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'cla
 
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 import { AuditActionWire, type WireAuditAction } from '../../../common/enums/wire';
-import { UserRole } from '../../../generated/prisma/enums';
+import { AccountRole } from '../../../generated/prisma/enums';
 
 export class AuditEntryDto {
   @ApiProperty() id!: string;
@@ -11,8 +11,8 @@ export class AuditEntryDto {
   @ApiProperty({ nullable: true, description: 'Null once the actor is deleted; the name survives' })
   actorId!: string | null;
   @ApiProperty() actorName!: string;
-  @ApiProperty({ enum: UserRole, description: 'The role held at the time, not today' })
-  actorRole!: UserRole;
+  @ApiProperty({ enum: AccountRole, description: 'The role held at the time, not today' })
+  actorRole!: AccountRole;
   @ApiProperty({ enum: AuditActionWire.values }) action!: WireAuditAction;
   @ApiProperty() entity!: string;
   @ApiProperty({ nullable: true }) entityRef!: string | null;
