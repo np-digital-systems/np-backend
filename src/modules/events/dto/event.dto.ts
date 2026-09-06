@@ -190,3 +190,28 @@ export class QueryEventsDto {
   @IsBoolean()
   unsponsoredOnly?: boolean;
 }
+
+/**
+ * Someone who could be asked to give to this observance.
+ *
+ * "Contributor" is never stored: it is computed from what people actually gave
+ * in earlier years, which is what makes the collection sheet open with last
+ * year's names already on it.
+ */
+export class ContributorDto {
+  @ApiProperty() partyId!: number;
+  @ApiProperty() name!: string;
+  @ApiProperty({ nullable: true }) nameEn!: string | null;
+  @ApiProperty({ nullable: true }) phone!: string | null;
+  @ApiProperty({
+    enum: ['gave-before', 'sponsor', 'vendor', 'devotee'],
+    description: 'Why they are being offered — presentation only, never stored',
+  })
+  reason!: 'gave-before' | 'sponsor' | 'vendor' | 'devotee';
+  @ApiProperty({ nullable: true, description: 'What they last gave to this observance' })
+  lastAmount!: number | null;
+  @ApiProperty({ nullable: true }) lastYear!: number | null;
+  @ApiProperty({ description: 'Whether they have already given to this occurrence' })
+  paidThisTime!: boolean;
+  @ApiProperty({ nullable: true }) paidAmount!: number | null;
+}

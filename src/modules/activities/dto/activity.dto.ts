@@ -15,6 +15,12 @@ export class ActivityDto {
   defaultProjectId!: number | null;
   @ApiProperty({ nullable: true, description: 'Who this activity is usually with' })
   defaultPartyId!: number | null;
+  @ApiProperty({
+    nullable: true,
+    description:
+      'The head this activity normally lands on. One column, not one per side: account.type already says whether it suits a receipt or a payment',
+  })
+  defaultAccountId!: number | null;
   @ApiProperty() isActive!: boolean;
 }
 
@@ -63,6 +69,13 @@ export class CreateActivityDto {
   @IsInt()
   @Min(1)
   defaultPartyId?: number | null;
+
+  @ApiPropertyOptional({ description: 'A postable income or expense head' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  defaultAccountId?: number | null;
 }
 
 export class UpdateActivityDto extends PartialType(CreateActivityDto) {

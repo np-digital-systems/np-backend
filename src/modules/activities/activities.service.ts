@@ -77,6 +77,7 @@ export class ActivitiesService {
         defaultFundId: dto.defaultFundId ?? null,
         defaultProjectId: dto.defaultProjectId ?? null,
         defaultPartyId: dto.defaultPartyId ?? null,
+        defaultAccountId: dto.defaultAccountId ?? null,
       },
     });
 
@@ -110,6 +111,8 @@ export class ActivitiesService {
       dto.defaultProjectId === undefined ? before.defaultProjectId : (dto.defaultProjectId ?? null);
     const defaultPartyId =
       dto.defaultPartyId === undefined ? before.defaultPartyId : (dto.defaultPartyId ?? null);
+    const defaultAccountId =
+      dto.defaultAccountId === undefined ? before.defaultAccountId : (dto.defaultAccountId ?? null);
 
     await this.assertCodingIsUsable(defaultFundId, defaultProjectId, defaultPartyId);
 
@@ -124,6 +127,7 @@ export class ActivitiesService {
         defaultFundId,
         defaultProjectId,
         defaultPartyId,
+        defaultAccountId,
         isActive: dto.isActive,
       },
     });
@@ -224,6 +228,7 @@ export class ActivitiesService {
       defaultFundId: activity.defaultFundId,
       defaultProjectId: activity.defaultProjectId,
       defaultPartyId: activity.defaultPartyId,
+      defaultAccountId: activity.defaultAccountId,
       isActive: activity.isActive,
       entryCount,
       income: round(earned),

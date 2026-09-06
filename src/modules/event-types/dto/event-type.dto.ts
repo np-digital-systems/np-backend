@@ -11,13 +11,18 @@ import {
   Min,
 } from 'class-validator';
 
-import { FrequencyType } from '../../../generated/prisma/enums';
+import { EventFunding, FrequencyType } from '../../../generated/prisma/enums';
 
 export class EventTypeDto {
   @ApiProperty() id!: number;
   @ApiProperty({ description: 'Tamil name — the language the calendar is kept in' }) name!: string;
   @ApiProperty() nameEn!: string;
   @ApiProperty({ enum: FrequencyType }) frequencyType!: FrequencyType;
+  @ApiProperty({
+    enum: EventFunding,
+    description: 'A general observance is paid for by collection and takes no named sponsor',
+  })
+  funding!: EventFunding;
   @ApiProperty({ description: 'How many instances a full year of this type contains' })
   noOfInstances!: number;
   @ApiProperty({
@@ -77,6 +82,11 @@ export class CreateEventTypeDto {
   @ApiProperty({ enum: FrequencyType })
   @IsEnum(FrequencyType)
   frequencyType!: FrequencyType;
+
+  @ApiPropertyOptional({ enum: EventFunding, default: EventFunding.sponsored })
+  @IsOptional()
+  @IsEnum(EventFunding)
+  funding?: EventFunding;
 
   @ApiProperty({ minimum: 1, maximum: 366 })
   @Type(() => Number)
