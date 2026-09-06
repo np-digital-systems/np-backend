@@ -120,10 +120,7 @@ export class SponsorsService {
         ...(query.instanceIdentifier === undefined
           ? {}
           : {
-              OR: [
-                { slot: { instanceIdentifier: query.instanceIdentifier } },
-                { slotId: null },
-              ],
+              OR: [{ slot: { instanceIdentifier: query.instanceIdentifier } }, { slotId: null }],
             }),
       },
       include: ASSIGNMENT_INCLUDE,
