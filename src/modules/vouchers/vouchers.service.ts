@@ -171,36 +171,24 @@ export class VouchersService {
   }
 
   /**
-   * Raise a receipt the temple itself is the author of, and post it.
+   * Raise a receipt on another module's behalf and put it in the queue.
    *
-   * Not a shortcut around approval — a statement that there is nothing here to
-   * approve. The approval gate puts a second pair of eyes on an entry somebody
-   * exercised judgement over: which head, which fund, how much. A sanththa
-   * subscription has none of that. The amount is the rate the temple fixed for
-   * the year, the head is the one configured in settings, and the payer is the
-   * member on the register. A clerk taking cash at the counter decides nothing,
-   * so there is no decision to review, and queueing it would leave the member
-   * holding a receipt for money the books cannot see until somebody approves.
+   * It stops at PendingApproval, like every other voucher. Nothing reaches the
+   * ledger because a clerk pressed a button on a register screen: a receipt
+   * raised this way is still somebody's entry, and the second pair of eyes is
+   * the control that catches the wrong member, the wrong year and the wrong
+   * amount before they are money the books have to be corrected out of.
    *
-   * It goes through `create` and `post` rather than writing its own rows, so
-   * reference allocation, coding validation and the ledger entries stay in the
-   * one place they are defined for every other voucher.
+   * The caller supplies the coding, so this only spares them `create` and
+   * `submit` — reference allocation, coding validation and the approval rules
+   * stay in the one place they are defined for every other voucher.
    */
-  async raiseAndPostSystemReceipt(
-    dto: CreateVoucherDto,
-    context: ActorContext,
-  ): Promise<VoucherRecordDto> {
+  async raiseForApproval(dto: CreateVoucherDto, context: ActorContext): Promise<VoucherRecordDto> {
     const created = await this.create(dto, context);
-    const id = Number(created.id);
 
-    // Straight to Approved so `post` finds the status it requires. Recorded as
-    // decided by the actor, because somebody did take the money.
-    await this.prisma.voucher.update({
-      where: { id },
-      data: { status: VoucherStatus.Approved, decidedBy: context.actor.id, decidedAt: new Date() },
-    });
-
-    return this.post(id, context);
+    // Raised by this actor a moment ago, so there is no other author's entry
+    // to guard against here — `canSeeAll` is about acting on somebody else's.
+    return this.submit(Number(created.id), context, true);
   }
 
   async update(
