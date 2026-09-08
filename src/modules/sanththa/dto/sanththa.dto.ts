@@ -4,10 +4,13 @@ import {
   IsDateString,
   IsIn,
   IsInt,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsPositive,
+  IsString,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -37,6 +40,18 @@ export class SanththaPaymentDto {
   @ApiProperty() paidOn!: string;
   @ApiProperty({ nullable: true, description: 'The receipt voucher this was banked through' })
   receiptVoucherRef!: string | null;
+  @ApiProperty({
+    nullable: true,
+    description: 'Where that receipt has got to. Null when no receipt is linked.',
+  })
+  receiptStatus!: string | null;
+  @ApiProperty({ nullable: true, description: 'The number written on the paper receipt book' })
+  manualVoucherNo!: string | null;
+  @ApiProperty({
+    description:
+      'Whether this may still be corrected. False once the receipt is approved or posted — from there a mistake is fixed by a further entry, not a rewrite.',
+  })
+  editable!: boolean;
   @ApiProperty({ enum: SUBSCRIPTION_MODES }) mode!: SubscriptionMode;
   @ApiProperty() collectedBy!: string;
   @ApiProperty() createdAt!: Date;
@@ -139,11 +154,53 @@ export class RecordPaymentDto {
   @IsIn(SUBSCRIPTION_MODES)
   mode!: SubscriptionMode;
 
+  @ApiProperty({
+    description:
+      'The number written on the paper receipt book. Required: the member walks away holding it, so an entry without one cannot be tied back to what they hold.',
+  })
+  @IsString()
+  @IsNotEmpty({ message: 'The receipt book number is required' })
+  @MaxLength(32)
+  manualVoucherNo!: string;
+
   @ApiPropertyOptional({ description: 'Link the receipt voucher this was banked through' })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
   receiptVoucherId?: number;
+}
+
+/**
+ * Correcting a subscription already taken.
+ *
+ * Only what a clerk can get wrong at the counter: how much, when, how, and the
+ * number off the paper book. The member and the year are what identify the row
+ * — changing those is not a correction but a different subscription.
+ */
+export class UpdatePaymentDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @IsPositive()
+  amount?: number;
+
+  @ApiPropertyOptional({ example: '2026-05-01' })
+  @IsOptional()
+  @IsDateString()
+  paidOn?: string;
+
+  @ApiPropertyOptional({ enum: SUBSCRIPTION_MODES })
+  @IsOptional()
+  @IsIn(SUBSCRIPTION_MODES)
+  mode?: SubscriptionMode;
+
+  @ApiPropertyOptional({ description: 'Omit to leave it as it is; it cannot be cleared' })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty({ message: 'The receipt book number is required' })
+  @MaxLength(32)
+  manualVoucherNo?: string;
 }
 
 export class QueryRegisterDto extends PaginationQueryDto {

@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 
+import { VoucherStatusWire } from '../../common/enums/wire';
 import { PageDto, PageMetaDto } from '../../common/dto/page.dto';
 import { toRupees } from '../../common/money/money';
 import { ActorContext } from '../../common/types/authenticated-user';
@@ -26,6 +27,7 @@ import {
   SanththaSummaryDto,
   SetRateDto,
   SubscriptionMode,
+  UpdatePaymentDto,
 } from './dto/sanththa.dto';
 
 const SPONSOR_INCLUDE = {
@@ -36,12 +38,32 @@ type SponsorRow = Prisma.SponsorGetPayload<{ include: typeof SPONSOR_INCLUDE }>;
 
 const PAYMENT_INCLUDE = {
   sponsor: { include: SPONSOR_INCLUDE },
-  receiptVoucher: { select: { ref: true } },
+  receiptVoucher: { select: { id: true, ref: true, status: true, manualVoucherNo: true } },
 } satisfies Prisma.SanththaPaymentInclude;
 
 type PaymentRow = Prisma.SanththaPaymentGetPayload<{ include: typeof PAYMENT_INCLUDE }>;
 
 const round = (value: number) => Math.round(value * 100) / 100;
+
+/** Statuses that mean the receipt was thrown away rather than merely unfinished. */
+const VOIDED: VoucherStatus[] = [VoucherStatus.Rejected, VoucherStatus.Cancelled];
+
+/*
+ * While a subscription may still be corrected in place.
+ *
+ * The same window a voucher may be edited in, and for the same reason: once an
+ * approver has passed it, or it has reached the ledger, the entry is somebody
+ * else's decision and a correction is a further entry rather than a rewrite.
+ */
+const CORRECTABLE: VoucherStatus[] = [
+  VoucherStatus.Draft,
+  VoucherStatus.PendingApproval,
+  VoucherStatus.Rejected,
+];
+
+/** What the receipt for a year's subscription is called, in the temple's own words. */
+const describeSubscription = (year: number, sponsorNo: string): string =>
+  `வருடாந்த சந்தா பணம் ${year} — ${sponsorNo}`;
 
 /**
  * The annual sanththa.
@@ -204,9 +226,9 @@ export class SanththaService {
      *
      * The receipt and the register row are two writes that cannot be made one,
      * so the order matters: an exempt sponsor, a duplicate year, a missing rate
-     * or an unusable head all raise here, while nothing has been posted. What
-     * is left after this point is a receipt whose only remaining job is to be
-     * recorded, which is the pair the temple can least afford to get wrong.
+     * or an unusable head all raise here, while there is still nothing to undo.
+     * What is left after this point is a receipt waiting for approval, and the
+     * register row that says which subscription it answers.
      */
     const receiptVoucherId =
       dto.receiptVoucherId ?? (await this.raiseReceipt(sponsor, dto, amount, context));
@@ -244,6 +266,12 @@ export class SanththaService {
    * it cannot be audited, it cannot be changed without a deploy, and it was
    * carrying a hard-coded account id that had drifted out of the chart.
    *
+   * It goes to the approval queue, not to the ledger. Taking the money and
+   * accounting for it are two acts by two people: the register records that a
+   * member paid, and an approver checks the entry before it becomes a figure
+   * anybody reports. Posting it here would have let one person put money in the
+   * books unreviewed, which is the control the queue exists to keep.
+   *
    * The party is the sponsor themselves, so the receipt answers "who paid"
    * from the register rather than from a name typed at the counter.
    */
@@ -259,14 +287,15 @@ export class SanththaService {
       throw new BadRequestException(this.fundProblem(coding.activityName));
     }
 
-    const voucher = await this.vouchers.raiseAndPostSystemReceipt(
+    const voucher = await this.vouchers.raiseForApproval(
       {
         kind: VoucherKind.receipt,
         date: dto.paidOn,
-        description: `Sanththa subscription ${dto.year} — ${sponsor.sponsorNo}`,
+        description: describeSubscription(dto.year, sponsor.sponsorNo),
         mode: dto.mode,
         party: sponsor.party.nameTa,
         partyId: sponsor.partyId,
+        manualVoucherNo: dto.manualVoucherNo,
         lines: [
           {
             accountId: coding.accountId,
@@ -381,6 +410,109 @@ export class SanththaService {
       : `${activityName} is the sanththa activity but has no active default fund; set one so subscriptions know which fund they belong to.`;
   }
 
+  /**
+   * Correct a subscription already taken, receipt and all.
+   *
+   * Only while the receipt is still somebody's draft. Once an approver has
+   * passed it — and certainly once it is in the ledger — the figure has been
+   * relied on, and the way to fix it is a further entry that says so, not a
+   * rewrite that leaves no trace of what was approved.
+   *
+   * The receipt is edited through VouchersService, which returns it to Draft
+   * and clears the earlier submission on purpose: a corrected entry has to be
+   * approved again, so nobody can approve a version they never read. It is
+   * resubmitted here so it lands back in the queue rather than stalling.
+   */
+  async update(
+    id: number,
+    dto: UpdatePaymentDto,
+    context: ActorContext,
+  ): Promise<SanththaPaymentDto> {
+    const before = await this.prisma.sanththaPayment.findUnique({
+      where: { id },
+      include: PAYMENT_INCLUDE,
+    });
+
+    if (!before) throw new NotFoundException(`Subscription ${id} was not found`);
+
+    const receipt = before.receiptVoucher;
+
+    if (receipt && !CORRECTABLE.includes(receipt.status)) {
+      throw new ConflictException(
+        `${receipt.ref} is ${VoucherStatusWire.toWire(receipt.status).toLowerCase()}; correct it with a further entry rather than by editing this one`,
+      );
+    }
+
+    const amount = dto.amount ?? toRupees(before.amount);
+    const paidOn = dto.paidOn ?? before.paidOn.toISOString().slice(0, 10);
+    const mode = dto.mode ?? (before.mode as SubscriptionMode);
+    /*
+     * Kept unless a new one is given, and it cannot end up blank: the number is
+     * required on the voucher itself. A receipt raised before it was required
+     * has none to fall back on, so this asks for one rather than failing deeper
+     * down with a message about a voucher the clerk never mentioned.
+     */
+    const manualVoucherNo = dto.manualVoucherNo ?? receipt?.manualVoucherNo ?? '';
+
+    if (receipt && manualVoucherNo.trim().length === 0) {
+      throw new BadRequestException(
+        `${receipt.ref} has no receipt book number; supply one to correct it`,
+      );
+    }
+
+    if (receipt) {
+      const coding = await this.resolveCoding();
+
+      if (coding.fundId === null) {
+        throw new BadRequestException(this.fundProblem(coding.activityName));
+      }
+
+      await this.vouchers.update(
+        Number(receipt.id),
+        {
+          kind: VoucherKind.receipt,
+          date: paidOn,
+          description: describeSubscription(before.year, before.sponsor.sponsorNo),
+          mode,
+          party: before.sponsor.party.nameTa,
+          partyId: before.sponsorId,
+          manualVoucherNo,
+          lines: [
+            {
+              accountId: coding.accountId,
+              amount,
+              fundId: coding.fundId,
+              activityId: coding.activityId ?? undefined,
+            },
+          ],
+        },
+        context,
+        true,
+      );
+
+      await this.vouchers.submit(Number(receipt.id), context, true);
+    }
+
+    const payment = await this.prisma.sanththaPayment.update({
+      where: { id },
+      data: { amount, paidOn: new Date(paidOn), mode },
+      include: PAYMENT_INCLUDE,
+    });
+
+    await this.audit.record(context, {
+      action: 'update',
+      entity: 'sanththa_payment',
+      entityRef: String(id),
+      summary: `Corrected ${before.sponsor.sponsorNo}'s ${before.year} subscription`,
+      diff: AuditService.diff(
+        { amount: toRupees(before.amount), paidOn: before.paidOn, mode: before.mode },
+        { amount, paidOn: new Date(paidOn), mode },
+      ),
+    });
+
+    return this.toPayment(payment, true);
+  }
+
   private async rateForOrFail(year: number): Promise<number> {
     const rate = await this.prisma.sanththaRate.findUnique({ where: { year } });
 
@@ -393,7 +525,16 @@ export class SanththaService {
     return toRupees(rate.amount);
   }
 
-  /** A subscription may be tied to a posted receipt, and to only one. */
+  /**
+   * A subscription may be tied to one receipt, and it need not be posted yet.
+   *
+   * It used to have to be. That made sense while the register raised its own
+   * receipt and drove it to Posted in the same breath; now the receipt waits
+   * for an approver, so insisting on Posted here would reject the very rows
+   * this module creates. What a subscription must never point at is a receipt
+   * somebody threw away — a rejected or cancelled one is not evidence that
+   * money was taken.
+   */
   private async assertReceipt(receiptVoucherId: number): Promise<void> {
     const voucher = await this.prisma.voucher.findUnique({
       where: { id: BigInt(receiptVoucherId) },
@@ -404,8 +545,10 @@ export class SanththaService {
     if (voucher.kind !== VoucherKind.receipt) {
       throw new BadRequestException(`${voucher.ref} is a payment, not a receipt`);
     }
-    if (voucher.status !== VoucherStatus.Posted) {
-      throw new BadRequestException(`${voucher.ref} has not been posted`);
+    if (VOIDED.includes(voucher.status)) {
+      throw new BadRequestException(
+        `${voucher.ref} was ${VoucherStatusWire.toWire(voucher.status).toLowerCase()}; a subscription cannot be evidenced by it`,
+      );
     }
     if (voucher.sanththaPayment) {
       throw new ConflictException(`${voucher.ref} is already tied to another subscription`);
@@ -434,6 +577,13 @@ export class SanththaService {
       amount: toRupees(payment.amount),
       paidOn: payment.paidOn.toISOString().slice(0, 10),
       receiptVoucherRef: payment.receiptVoucher?.ref ?? null,
+      receiptStatus: payment.receiptVoucher
+        ? VoucherStatusWire.toWire(payment.receiptVoucher.status)
+        : null,
+      manualVoucherNo: payment.receiptVoucher?.manualVoucherNo ?? null,
+      // No receipt at all leaves nothing to contradict, so the row itself is
+      // still correctable.
+      editable: payment.receiptVoucher ? CORRECTABLE.includes(payment.receiptVoucher.status) : true,
       mode: payment.mode as SubscriptionMode,
       collectedBy: payment.collectedBy,
       createdAt: payment.createdAt,
