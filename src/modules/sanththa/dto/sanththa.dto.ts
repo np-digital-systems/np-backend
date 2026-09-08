@@ -4,6 +4,7 @@ import {
   IsDateString,
   IsIn,
   IsInt,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsPositive,
@@ -153,13 +154,14 @@ export class RecordPaymentDto {
   @IsIn(SUBSCRIPTION_MODES)
   mode!: SubscriptionMode;
 
-  @ApiPropertyOptional({
-    description: 'The number written on the paper receipt book, where the temple keeps one',
+  @ApiProperty({
+    description:
+      'The number written on the paper receipt book. Required: the member walks away holding it, so an entry without one cannot be tied back to what they hold.',
   })
-  @IsOptional()
   @IsString()
+  @IsNotEmpty({ message: 'The receipt book number is required' })
   @MaxLength(32)
-  manualVoucherNo?: string;
+  manualVoucherNo!: string;
 
   @ApiPropertyOptional({ description: 'Link the receipt voucher this was banked through' })
   @IsOptional()
@@ -193,9 +195,10 @@ export class UpdatePaymentDto {
   @IsIn(SUBSCRIPTION_MODES)
   mode?: SubscriptionMode;
 
-  @ApiPropertyOptional({ description: 'Send an empty string to clear it' })
+  @ApiPropertyOptional({ description: 'Omit to leave it as it is; it cannot be cleared' })
   @IsOptional()
   @IsString()
+  @IsNotEmpty({ message: 'The receipt book number is required' })
   @MaxLength(32)
   manualVoucherNo?: string;
 }
