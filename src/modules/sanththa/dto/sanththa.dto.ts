@@ -85,6 +85,31 @@ export class SetRateDto {
   amount!: number;
 }
 
+/**
+ * Where a subscription will land, so the counter can say so before taking money.
+ *
+ * Answered from the configuration rather than from constants in the browser: a
+ * screen that names a head it does not actually post to is worse than one that
+ * names none, and this is the same lookup the write itself does.
+ */
+export class SanththaPostingDto {
+  @ApiProperty({ description: 'Whether a subscription can be receipted at all yet' })
+  configured!: boolean;
+  @ApiProperty({ nullable: true }) accountCode!: string | null;
+  @ApiProperty({ nullable: true }) accountName!: string | null;
+  @ApiProperty({ nullable: true }) fundName!: string | null;
+  @ApiProperty({
+    nullable: true,
+    description: 'The activity the head is coded to, where it has one',
+  })
+  activityName!: string | null;
+  @ApiProperty({
+    nullable: true,
+    description: 'What is missing, when the coding is not usable yet',
+  })
+  problem!: string | null;
+}
+
 export class RecordPaymentDto {
   @ApiProperty({ description: 'The sponsor paying — their party id' })
   @Type(() => Number)

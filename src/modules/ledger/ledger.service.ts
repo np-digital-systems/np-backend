@@ -45,7 +45,21 @@ export class LedgerService {
       this.prisma.ledgerEntry.findMany({
         where,
         include: ENTRY_INCLUDE,
-        orderBy: [{ date: query.order }, { id: query.order }],
+        /*
+         * Vouchers newest-first, but each one read in its own order: debit
+         * before credit, which is how a journal entry is written and read.
+         *
+         * `lineNo` already says this. `buildPostingLines` puts the money first
+         * for a receipt and the reason first for a payment, and both of those
+         * are the debit side, so line 1 is the debit either way. Sorting on
+         * `id` instead reversed the pair whenever the list ran newest-first,
+         * which showed the credit above the debit it answers.
+         *
+         * Only the grouping follows `query.order`. A voucher's internal order
+         * is not a direction to be flipped — it reads the same way whichever
+         * end of the ledger you start from.
+         */
+        orderBy: [{ date: query.order }, { voucherId: query.order }, { lineNo: 'asc' }],
         skip: query.skip,
         take: query.limit,
       }),
