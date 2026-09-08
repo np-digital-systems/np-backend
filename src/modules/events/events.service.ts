@@ -265,10 +265,10 @@ export class EventsService {
     const ids = types.map((type) => type.id);
 
     const [sponsors, events] = await Promise.all([
-      // Unplaced sponsors come back too and simply match no slot below; they
-      // belong to the type, not yet to any one of its occurrences.
+      // Every sponsorship holds a slot, so they are gathered by the type those
+      // slots belong to and matched back onto each slot below.
       this.prisma.eventTypeSponsor.findMany({
-        where: { eventTypeId: { in: ids } },
+        where: { slot: { eventTypeId: { in: ids } } },
         include: { party: { select: SPONSOR_SELECT } },
       }),
       this.prisma.event.findMany({
