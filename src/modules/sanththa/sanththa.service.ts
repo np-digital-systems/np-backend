@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 
+import { VoucherStatusWire } from '../../common/enums/wire';
 import { PageDto, PageMetaDto } from '../../common/dto/page.dto';
 import { toRupees } from '../../common/money/money';
 import { ActorContext } from '../../common/types/authenticated-user';
@@ -42,6 +43,9 @@ const PAYMENT_INCLUDE = {
 type PaymentRow = Prisma.SanththaPaymentGetPayload<{ include: typeof PAYMENT_INCLUDE }>;
 
 const round = (value: number) => Math.round(value * 100) / 100;
+
+/** Statuses that mean the receipt was thrown away rather than merely unfinished. */
+const VOIDED: VoucherStatus[] = [VoucherStatus.Rejected, VoucherStatus.Cancelled];
 
 /**
  * The annual sanththa.
@@ -204,9 +208,9 @@ export class SanththaService {
      *
      * The receipt and the register row are two writes that cannot be made one,
      * so the order matters: an exempt sponsor, a duplicate year, a missing rate
-     * or an unusable head all raise here, while nothing has been posted. What
-     * is left after this point is a receipt whose only remaining job is to be
-     * recorded, which is the pair the temple can least afford to get wrong.
+     * or an unusable head all raise here, while there is still nothing to undo.
+     * What is left after this point is a receipt waiting for approval, and the
+     * register row that says which subscription it answers.
      */
     const receiptVoucherId =
       dto.receiptVoucherId ?? (await this.raiseReceipt(sponsor, dto, amount, context));
@@ -244,6 +248,12 @@ export class SanththaService {
    * it cannot be audited, it cannot be changed without a deploy, and it was
    * carrying a hard-coded account id that had drifted out of the chart.
    *
+   * It goes to the approval queue, not to the ledger. Taking the money and
+   * accounting for it are two acts by two people: the register records that a
+   * member paid, and an approver checks the entry before it becomes a figure
+   * anybody reports. Posting it here would have let one person put money in the
+   * books unreviewed, which is the control the queue exists to keep.
+   *
    * The party is the sponsor themselves, so the receipt answers "who paid"
    * from the register rather than from a name typed at the counter.
    */
@@ -259,7 +269,7 @@ export class SanththaService {
       throw new BadRequestException(this.fundProblem(coding.activityName));
     }
 
-    const voucher = await this.vouchers.raiseAndPostSystemReceipt(
+    const voucher = await this.vouchers.raiseForApproval(
       {
         kind: VoucherKind.receipt,
         date: dto.paidOn,
@@ -393,7 +403,16 @@ export class SanththaService {
     return toRupees(rate.amount);
   }
 
-  /** A subscription may be tied to a posted receipt, and to only one. */
+  /**
+   * A subscription may be tied to one receipt, and it need not be posted yet.
+   *
+   * It used to have to be. That made sense while the register raised its own
+   * receipt and drove it to Posted in the same breath; now the receipt waits
+   * for an approver, so insisting on Posted here would reject the very rows
+   * this module creates. What a subscription must never point at is a receipt
+   * somebody threw away — a rejected or cancelled one is not evidence that
+   * money was taken.
+   */
   private async assertReceipt(receiptVoucherId: number): Promise<void> {
     const voucher = await this.prisma.voucher.findUnique({
       where: { id: BigInt(receiptVoucherId) },
@@ -404,8 +423,10 @@ export class SanththaService {
     if (voucher.kind !== VoucherKind.receipt) {
       throw new BadRequestException(`${voucher.ref} is a payment, not a receipt`);
     }
-    if (voucher.status !== VoucherStatus.Posted) {
-      throw new BadRequestException(`${voucher.ref} has not been posted`);
+    if (VOIDED.includes(voucher.status)) {
+      throw new BadRequestException(
+        `${voucher.ref} was ${VoucherStatusWire.toWire(voucher.status).toLowerCase()}; a subscription cannot be evidenced by it`,
+      );
     }
     if (voucher.sanththaPayment) {
       throw new ConflictException(`${voucher.ref} is already tied to another subscription`);
