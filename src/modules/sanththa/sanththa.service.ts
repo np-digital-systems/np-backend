@@ -446,10 +446,19 @@ export class SanththaService {
     const amount = dto.amount ?? toRupees(before.amount);
     const paidOn = dto.paidOn ?? before.paidOn.toISOString().slice(0, 10);
     const mode = dto.mode ?? (before.mode as SubscriptionMode);
-    const manualVoucherNo =
-      dto.manualVoucherNo === undefined
-        ? (receipt?.manualVoucherNo ?? undefined)
-        : dto.manualVoucherNo || undefined;
+    /*
+     * Kept unless a new one is given, and it cannot end up blank: the number is
+     * required on the voucher itself. A receipt raised before it was required
+     * has none to fall back on, so this asks for one rather than failing deeper
+     * down with a message about a voucher the clerk never mentioned.
+     */
+    const manualVoucherNo = dto.manualVoucherNo ?? receipt?.manualVoucherNo ?? '';
+
+    if (receipt && manualVoucherNo.trim().length === 0) {
+      throw new BadRequestException(
+        `${receipt.ref} has no receipt book number; supply one to correct it`,
+      );
+    }
 
     if (receipt) {
       const coding = await this.resolveCoding();
