@@ -8,6 +8,7 @@ import {
   IsEnum,
   IsIn,
   IsInt,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsPositive,
@@ -188,11 +189,14 @@ export class CreateVoucherDto {
   @MaxLength(200)
   party!: string;
 
-  @ApiPropertyOptional()
-  @IsOptional()
+  @ApiProperty({
+    description:
+      'The number on the temple’s physical voucher book. Required, so every entry in the system can be matched against the paper it was written on.',
+  })
   @IsString()
+  @IsNotEmpty({ message: 'The manual voucher number is required' })
   @MaxLength(60)
-  manualVoucherNo?: string;
+  manualVoucherNo!: string;
 
   @ApiPropertyOptional()
   @IsOptional()

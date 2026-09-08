@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Post, Put, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+  Put,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
 import { Actor } from '../../common/decorators/actor.decorator';
@@ -17,6 +27,7 @@ import {
   SanththaRegisterRowDto,
   SanththaSummaryDto,
   SetRateDto,
+  UpdatePaymentDto,
 } from './dto/sanththa.dto';
 import { SanththaService } from './sanththa.service';
 
@@ -79,6 +90,19 @@ export class SanththaController {
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<PageDto<SanththaPaymentDto>> {
     return this.sanththa.payments(query, await this.canSeeContact(user));
+  }
+
+  @Patch('payments/:id')
+  @RequirePermissions('contribution:record')
+  @ApiOperation({
+    summary: 'Correct a subscription, while its receipt is still awaiting approval',
+  })
+  updatePayment(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdatePaymentDto,
+    @Actor() context: ActorContext,
+  ): Promise<SanththaPaymentDto> {
+    return this.sanththa.update(id, dto, context);
   }
 
   @Post('payments')
