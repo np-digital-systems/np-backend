@@ -12,6 +12,7 @@ import {
   QueryRegisterDto,
   RecordPaymentDto,
   SanththaPaymentDto,
+  SanththaPostingDto,
   SanththaRateDto,
   SanththaRegisterRowDto,
   SanththaSummaryDto,
@@ -46,6 +47,15 @@ export class SanththaController {
   @RequirePermissions('contribution:view')
   summary(@Query('year') year?: string): Promise<SanththaSummaryDto> {
     return this.sanththa.summary(year ? Number(year) : undefined);
+  }
+
+  @Get('posting')
+  @RequirePermissions('contribution:view')
+  @ApiOperation({
+    summary: 'Where a subscription will be receipted, and what is missing if it cannot be',
+  })
+  posting(): Promise<SanththaPostingDto> {
+    return this.sanththa.posting();
   }
 
   @Get('rates')

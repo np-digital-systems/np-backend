@@ -737,7 +737,6 @@ model EventType {
   activity Activity? @relation(fields: [activityId], references: [id])
 
   slots    EventSlot[]
-  sponsors EventTypeSponsor[]
 
   @@index([activityId], map: "event_types_activity")
   @@index([funding], map: "event_types_funding")
@@ -761,22 +760,19 @@ model EventSlot {
   @@map("event_slots")
 }
 
-/// Who may take a slot — the arrangement, with no year attached. A null slot is
-/// a registered sponsor not yet placed, not "every slot".
+/// Who takes a slot — the arrangement, with no year attached. The slot carries
+/// the event type, so this table never names one itself.
 model EventTypeSponsor {
-  id          Int      @id @default(autoincrement())
-  eventTypeId Int      @map("event_type_id")
-  slotId      Int?     @map("slot_id")
-  partyId     Int      @map("party_id")
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  id        Int      @id @default(autoincrement())
+  slotId    Int      @map("slot_id")
+  partyId   Int      @map("party_id")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  eventType EventType  @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
-  slot      EventSlot? @relation(fields: [slotId], references: [id], onDelete: Cascade)
-  party     Party      @relation(fields: [partyId], references: [id])
+  slot  EventSlot @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  party Party     @relation(fields: [partyId], references: [id])
 
-  @@unique([eventTypeId, slotId, partyId], map: "one_sponsor_per_slot")
+  @@unique([slotId, partyId], map: "one_sponsor_per_slot")
   @@index([partyId], map: "sponsors_by_party")
-  @@index([slotId], map: "sponsors_by_slot")
   @@map("event_type_sponsors")
 }
 
