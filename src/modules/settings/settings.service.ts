@@ -13,6 +13,7 @@ import {
 
 const ACCOUNTING_DEFAULTS: AccountingSettings = {
   cashAccountId: null,
+  sanththaAccountId: null,
   allowSelfApproval: false,
   depositMaturityAlertDays: 30,
 };
@@ -69,8 +70,22 @@ export class SettingsService {
     return this.write('temple', { ...dto }, context);
   }
 
+  /** The sanththa income head, or a clear error explaining how to configure one. */
+  async sanththaAccountId(): Promise<number> {
+    const { sanththaAccountId } = await this.accounting();
+
+    if (sanththaAccountId === null) {
+      throw new BadRequestException(
+        'No sanththa head is configured. Set accounting.sanththaAccountId to the income head subscriptions are receipted to.',
+      );
+    }
+
+    return sanththaAccountId;
+  }
+
   async updateAccounting(dto: AccountingSettingsDto, context: ActorContext): Promise<SettingDto> {
     if (dto.cashAccountId !== undefined) await this.assertIsCashHead(dto.cashAccountId);
+    if (dto.sanththaAccountId !== undefined) await this.assertIsSanththaHead(dto.sanththaAccountId);
 
     const written = await this.write('accounting', { ...dto }, context);
     this.accountingCache = null;
@@ -85,6 +100,23 @@ export class SettingsService {
     if (account.type !== 'asset')
       throw new BadRequestException('The cash head must be an asset account');
     if (!account.isPostable) throw new BadRequestException('The cash head must accept entries');
+  }
+
+  /**
+   * Checked here rather than when a subscription is taken.
+   *
+   * A head that cannot carry the entry is a mistake made once, in settings, by
+   * somebody who can still see the picker they made it in. Discovering it at
+   * the counter instead means telling a member holding cash to come back later.
+   */
+  private async assertIsSanththaHead(accountId: number): Promise<void> {
+    const account = await this.prisma.account.findUnique({ where: { id: accountId } });
+
+    if (!account) throw new BadRequestException(`Account ${accountId} was not found`);
+    if (account.type !== 'income')
+      throw new BadRequestException('The sanththa head must be an income account');
+    if (!account.isPostable) throw new BadRequestException('The sanththa head must accept entries');
+    if (!account.isActive) throw new BadRequestException('The sanththa head must be active');
   }
 
   private async write(
