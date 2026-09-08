@@ -12,11 +12,14 @@ import { Prisma } from '../../generated/prisma/client';
 import { VoucherKind, VoucherStatus } from '../../generated/prisma/enums';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
+import { VouchersService } from '../vouchers/vouchers.service';
+import { SettingsService } from '../settings/settings.service';
 import {
   QueryPaymentsDto,
   QueryRegisterDto,
   RecordPaymentDto,
   SanththaPaymentDto,
+  SanththaPostingDto,
   SanththaRateDto,
   SanththaRegisterRowDto,
   SanththaSponsorDto,
@@ -52,6 +55,8 @@ export class SanththaService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly vouchers: VouchersService,
+    private readonly settings: SettingsService,
   ) {}
 
   async register(
@@ -194,6 +199,18 @@ export class SanththaService {
 
     const amount = dto.amount ?? (await this.rateForOrFail(dto.year));
 
+    /*
+     * Everything that can refuse this is checked before a voucher exists.
+     *
+     * The receipt and the register row are two writes that cannot be made one,
+     * so the order matters: an exempt sponsor, a duplicate year, a missing rate
+     * or an unusable head all raise here, while nothing has been posted. What
+     * is left after this point is a receipt whose only remaining job is to be
+     * recorded, which is the pair the temple can least afford to get wrong.
+     */
+    const receiptVoucherId =
+      dto.receiptVoucherId ?? (await this.raiseReceipt(sponsor, dto, amount, context));
+
     if (dto.receiptVoucherId !== undefined) await this.assertReceipt(dto.receiptVoucherId);
 
     const payment = await this.prisma.sanththaPayment.create({
@@ -203,7 +220,7 @@ export class SanththaService {
         amount,
         paidOn: new Date(dto.paidOn),
         mode: dto.mode,
-        receiptVoucherId: dto.receiptVoucherId,
+        receiptVoucherId,
         collectedBy: context.actor.id,
       },
       include: PAYMENT_INCLUDE,
@@ -217,6 +234,151 @@ export class SanththaService {
     });
 
     return this.toPayment(payment, true);
+  }
+
+  /**
+   * The receipt a subscription becomes.
+   *
+   * Raised here rather than by the screen that called it. A browser deciding
+   * which head the temple's income lands on is a decision in the wrong place:
+   * it cannot be audited, it cannot be changed without a deploy, and it was
+   * carrying a hard-coded account id that had drifted out of the chart.
+   *
+   * The party is the sponsor themselves, so the receipt answers "who paid"
+   * from the register rather than from a name typed at the counter.
+   */
+  private async raiseReceipt(
+    sponsor: SponsorRow,
+    dto: RecordPaymentDto,
+    amount: number,
+    context: ActorContext,
+  ): Promise<number> {
+    const coding = await this.resolveCoding();
+
+    if (coding.fundId === null) {
+      throw new BadRequestException(this.fundProblem(coding.activityName));
+    }
+
+    const voucher = await this.vouchers.raiseAndPostSystemReceipt(
+      {
+        kind: VoucherKind.receipt,
+        date: dto.paidOn,
+        description: `Sanththa subscription ${dto.year} — ${sponsor.sponsorNo}`,
+        mode: dto.mode,
+        party: sponsor.party.nameTa,
+        partyId: sponsor.partyId,
+        lines: [
+          {
+            accountId: coding.accountId,
+            amount,
+            fundId: coding.fundId,
+            activityId: coding.activityId ?? undefined,
+          },
+        ],
+      },
+      context,
+    );
+
+    return Number(voucher.id);
+  }
+
+  /**
+   * Where a subscription is receipted, worked out rather than written down.
+   *
+   * Settings name one thing: the income head. Everything else follows it. The
+   * activity is the one that declares this head as its default — the same
+   * `activity carries the coding` link the voucher form uses — and the fund is
+   * that activity's. Naming the head twice, once in settings and once beside a
+   * fund id, is how the two drift apart.
+   *
+   * A head no activity claims is still usable, but only if it can be funded,
+   * and nothing here guesses a fund: an entry in the wrong fund is money moved
+   * between purposes the temple keeps deliberately separate.
+   */
+  private async resolveCoding(): Promise<{
+    accountId: number;
+    account: { code: string; nameTa: string };
+    fundId: number | null;
+    fundName: string | null;
+    activityId: number | null;
+    activityName: string | null;
+  }> {
+    const accountId = await this.settings.sanththaAccountId();
+
+    const account = await this.prisma.account.findUnique({
+      where: { id: accountId },
+      select: {
+        code: true,
+        nameTa: true,
+        defaultForActivities: {
+          where: { isActive: true },
+          select: {
+            id: true,
+            nameTa: true,
+            defaultFundId: true,
+            defaultFund: { select: { nameTa: true, isActive: true } },
+          },
+        },
+      },
+    });
+
+    if (!account) {
+      throw new BadRequestException(
+        `The configured sanththa head (account ${accountId}) no longer exists; choose another in the accounting settings`,
+      );
+    }
+
+    // Exactly one, or none. Two activities pointing at the same head is a
+    // question only the temple can answer, and picking one would answer it
+    // silently in every receipt from here on.
+    const activity =
+      account.defaultForActivities.length === 1 ? account.defaultForActivities[0] : null;
+
+    return {
+      accountId,
+      account: { code: account.code, nameTa: account.nameTa },
+      fundId: activity?.defaultFund?.isActive ? activity.defaultFundId : null,
+      fundName: activity?.defaultFund?.isActive ? activity.defaultFund.nameTa : null,
+      activityId: activity?.id ?? null,
+      activityName: activity?.nameTa ?? null,
+    };
+  }
+
+  /** The same lookup the write does, for a screen that has to say where money lands. */
+  async posting(): Promise<SanththaPostingDto> {
+    const unconfigured = (problem: string): SanththaPostingDto => ({
+      configured: false,
+      accountCode: null,
+      accountName: null,
+      fundName: null,
+      activityName: null,
+      problem,
+    });
+
+    let coding: Awaited<ReturnType<typeof this.resolveCoding>>;
+
+    try {
+      coding = await this.resolveCoding();
+    } catch (error) {
+      return unconfigured(
+        error instanceof BadRequestException ? error.message : 'The sanththa head is not usable',
+      );
+    }
+
+    return {
+      configured: coding.fundId !== null,
+      accountCode: coding.account.code,
+      accountName: coding.account.nameTa,
+      fundName: coding.fundName,
+      activityName: coding.activityName,
+      problem: coding.fundId === null ? this.fundProblem(coding.activityName) : null,
+    };
+  }
+
+  private fundProblem(activityName: string | null): string {
+    return activityName === null
+      ? 'No active activity names the sanththa head as its default, so there is no fund to receipt against. Give one that head, and give it a default fund.'
+      : `${activityName} is the sanththa activity but has no active default fund; set one so subscriptions know which fund they belong to.`;
   }
 
   private async rateForOrFail(year: number): Promise<number> {
