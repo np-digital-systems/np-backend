@@ -18,6 +18,16 @@ export class AccountingSettingsDto {
   cashAccountId?: number;
 
   @ApiPropertyOptional({
+    description:
+      'The income head an annual sanththa subscription is receipted to. The rest of the coding follows it: the activity is the one that names this head as its default, and that activity carries the fund.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  sanththaAccountId?: number;
+
+  @ApiPropertyOptional({
     default: false,
     description:
       'Whether the person who raised a voucher may also approve it. Off by default: approval is a second pair of eyes.',
@@ -43,6 +53,7 @@ export class SettingDto {
 
 export interface AccountingSettings {
   cashAccountId: number | null;
+  sanththaAccountId: number | null;
   allowSelfApproval: boolean;
   depositMaturityAlertDays: number;
 }
