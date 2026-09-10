@@ -115,6 +115,27 @@ export class EventCostingsService {
     return costings.map((costing) => this.toRecord(costing, used.get(costing.id) ?? 0));
   }
 
+  /**
+   * Every version this scope has had, newest first.
+   *
+   * The same pooja, the same instance, priced across the years. This is what
+   * the temple asked the versions for: the committee revises a rate about every
+   * three years, and the question at the year end is what it was before.
+   */
+  async history(id: number): Promise<CostingRecordDto[]> {
+    const costing = await this.load(id);
+
+    const versions = await this.prisma.eventCosting.findMany({
+      where: { eventTypeId: costing.eventTypeId, slotId: costing.slotId },
+      include: COSTING_INCLUDE,
+      orderBy: { effectiveFrom: 'desc' },
+    });
+
+    const used = await this.usageByCosting(versions.map((version) => version.id));
+
+    return versions.map((version) => this.toRecord(version, used.get(version.id) ?? 0));
+  }
+
   async findOneOrFail(id: number): Promise<CostingRecordDto> {
     const costing = await this.load(id);
 

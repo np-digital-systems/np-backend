@@ -20,6 +20,7 @@ import {
   BudgetLineDto,
   BudgetLineStatus,
   EventBudgetDto,
+  ExpectedAmountsDto,
   RaisePaymentDto,
   RaiseReceiptDto,
 } from './dto/event-budget.dto';
@@ -120,6 +121,51 @@ export class EventBudgetsService {
     });
 
     return this.find(eventId);
+  }
+
+  /**
+   * What this occurrence is expected to cost, for a voucher form to fill from.
+   *
+   * The frozen budget wins where there is one: a day already quoted is owed the
+   * figure it was quoted at, whatever the rate has since become. Where the day
+   * has not been costed, the costing in force on its date answers instead, so a
+   * cashier receipting a Friday nobody costed still gets today's rate rather
+   * than an empty box.
+   */
+  async expected(eventId: number): Promise<ExpectedAmountsDto> {
+    const event = await this.load(eventId);
+
+    if (event.budgetLines.length > 0) {
+      return {
+        costed: true,
+        sponsorAmount: event.sponsorAmount === null ? null : toRupees(event.sponsorAmount),
+        lines: event.budgetLines.map((line) => ({
+          accountId: line.accountId,
+          label: line.label,
+          amount: toRupees(line.amount),
+        })),
+      };
+    }
+
+    const costing = await this.costings.applicableTo(
+      event.slot.eventTypeId,
+      event.slotId,
+      event.scheduledDate,
+    );
+
+    if (!costing) return { costed: false, sponsorAmount: null, lines: [] };
+
+    return {
+      costed: false,
+      sponsorAmount: toRupees(costing.sponsorAmount),
+      lines: costing.lines
+        .filter((line) => line.parentLineId === null)
+        .map((line) => ({
+          accountId: line.accountId,
+          label: line.label ?? line.account.nameTa,
+          amount: toRupees(line.amount),
+        })),
+    };
   }
 
   /** The frozen budget, measured against what the ledger actually says. */
