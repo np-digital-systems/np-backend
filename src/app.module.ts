@@ -22,6 +22,7 @@ import { AssetsModule } from './modules/assets/assets.module';
 import { BankAccountsModule } from './modules/bank-accounts/bank-accounts.module';
 import { FinancialYearsModule } from './modules/financial-years/financial-years.module';
 import { FixedDepositsModule } from './modules/fixed-deposits/fixed-deposits.module';
+import { EventCostingsModule } from './modules/event-costings/event-costings.module';
 import { EventTypesModule } from './modules/event-types/event-types.module';
 import { EventsModule } from './modules/events/events.module';
 import { FundsModule } from './modules/funds/funds.module';
@@ -128,6 +129,7 @@ function prettyTransport(
     ReportsModule,
     EventTypesModule,
     EventsModule,
+    EventCostingsModule,
     SanththaModule,
     NotificationsModule,
     AuditReaderModule,
