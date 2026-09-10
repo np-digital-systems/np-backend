@@ -21,6 +21,8 @@ indexes, so it will never generate a migration that drops them — verified with
 20260825194500_integrity       35 CHECKs, 1 exclusion constraint, 8 partial indexes,
                                3 expression indexes, 10 triggers
 20260825194756_updated_at_defaults   database-side defaults for updated_at
+20260910090000_event_costings        3 tables, 1 enum, 2 columns on events
+20260910090100_event_costings_integrity  13 CHECKs, 1 exclusion constraint, 7 triggers
 ```
 
 `00000000000000_extensions` is named to sort first no matter what timestamp a
@@ -71,6 +73,21 @@ of putting them here rather than in application code.
 - **Posted vouchers are immutable.** Their financial columns cannot be edited and
   the row cannot be deleted; reverse the voucher instead. Notes may still be added.
 - **One subscription per member per year.**
+- **One costing in force per scope at a time** (a GiST exclusion constraint over
+  `daterange(effective_from, effective_to)`, partial on non-drafts). The scope is
+  the pair (event type, slot), a null slot being its own scope covering the whole
+  type — so a slot-specific version and a type-wide one may overlap on purpose,
+  and resolution settles which applies. Drafts are exempt, so next year's
+  revision can be written while the current one is still being quoted from.
+- **A costing heading equals the items under it.** Deferred, so a service may
+  rewrite a whole costing in one transaction and be judged on what it leaves
+  behind. An item inherits its heading's head and fund, and a costing goes one
+  level deep.
+- **A costing names heads the ledger will accept** — an income head for the
+  sponsor's receipt, expense heads for its lines, all of them postable.
+- **A frozen budget stays frozen once the day has been kept.** `event_budget_lines`
+  may be corrected while the occurrence is open and not after it is marked
+  complete, because the gap between plan and outturn is what the report is for.
 
 Violations surface through the API as `422 BusinessRuleViolation` with the
 database's own message, mapped in `src/common/filters/all-exceptions.filter.ts`.
