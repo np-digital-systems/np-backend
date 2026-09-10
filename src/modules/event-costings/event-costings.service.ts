@@ -5,15 +5,16 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 
-import { money, toRupees, toRupeesOrNull } from '../../common/money/money';
+import { money, toRupees } from '../../common/money/money';
 import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
-import { AccountType, CostingStatus } from '../../generated/prisma/enums';
+import { AccountType } from '../../generated/prisma/enums';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { toAccountRef } from '../accounts/accounts.service';
 import { describeInstance } from '../sponsors/instance-label';
 import { explainMissingCosting, resolveCosting } from './costing-resolution';
+import { explainMissingCoding, requireCoding, type PoojaCoding } from './costing-coding';
 import {
   CopyCostingDto,
   CostingItemDto,
@@ -27,7 +28,7 @@ import {
 } from './dto/event-costing.dto';
 
 const COSTING_INCLUDE = {
-  eventType: true,
+  eventType: { include: { activity: { include: { defaultAccount: true, defaultFund: true } } } },
   slot: { include: { eventType: true } },
   lines: {
     include: { account: true, party: { select: { nameTa: true } } },
@@ -44,6 +45,47 @@ const asDate = (value: string): Date => new Date(`${value}T00:00:00.000Z`);
 
 const dayBefore = (value: Date): Date => new Date(value.getTime() - 86_400_000);
 
+/** An activity's coding, or null where the temple has not set it yet. */
+function readCoding(
+  activity: { id: number; defaultAccountId: number | null; defaultFundId: number | null } | null,
+): PoojaCoding | null {
+  if (!activity || activity.defaultAccountId === null || activity.defaultFundId === null) {
+    return null;
+  }
+
+  return {
+    accountId: activity.defaultAccountId,
+    fundId: activity.defaultFundId,
+    activityId: activity.id,
+  };
+}
+
+/** Today as a Postgres `date` compares it: UTC midnight. */
+const today = (): Date => asDate(isoDate(new Date()));
+
+/** An item's amount follows from its quantity; a heading's is its own. */
+const lineAmount = (line: WriteCostingLineDto): Prisma.Decimal =>
+  (line.items ?? []).length > 0
+    ? (line.items ?? [])
+        .reduce(
+          (total, item) => total.plus(money(item.quantity).times(money(item.unitAmount))),
+          money(0),
+        )
+        .toDecimalPlaces(2)
+    : money(line.amount ?? 0);
+
+/**
+ * What the sponsor is asked for: the lines charged to them, added up.
+ *
+ * Calculated rather than typed. A quote that can be entered as well as summed
+ * is a quote with two answers, and the one nobody checks is the one that ends
+ * up on the receipt.
+ */
+const chargedTotal = (lines: readonly WriteCostingLineDto[]): Prisma.Decimal =>
+  lines
+    .filter((line) => line.chargedToSponsor ?? true)
+    .reduce((total, line) => total.plus(lineAmount(line)), money(0));
+
 @Injectable()
 export class EventCostingsService {
   constructor(
@@ -56,7 +98,7 @@ export class EventCostingsService {
       where: {
         eventTypeId: query.eventTypeId,
         slotId: query.slotId,
-        status: query.status,
+        ...(query.inForce ? { effectiveTo: null } : {}),
         ...(query.on
           ? {
               effectiveFrom: { lte: asDate(query.on) },
@@ -115,11 +157,7 @@ export class EventCostingsService {
   /** The costing in force for a slot on a date, with its lines. Null if none is. */
   async applicableTo(eventTypeId: number, slotId: number, on: Date): Promise<CostingRow | null> {
     const candidates = await this.prisma.eventCosting.findMany({
-      where: {
-        eventTypeId,
-        OR: [{ slotId }, { slotId: null }],
-        status: { not: CostingStatus.draft },
-      },
+      where: { eventTypeId, OR: [{ slotId }, { slotId: null }] },
       include: COSTING_INCLUDE,
     });
 
@@ -128,30 +166,31 @@ export class EventCostingsService {
 
   async create(dto: CreateCostingDto, context: ActorContext): Promise<CostingRecordDto> {
     await this.assertScope(dto.eventTypeId, dto.slotId ?? null);
-    await this.assertIncomeCoding(dto.incomeAccountId, dto.incomeFundId);
-    await this.assertLineCoding(dto.lines);
+
+    const coding = await this.codingFor(dto.eventTypeId);
+    const lines = dto.lines ?? [];
+
+    await this.assertLineCoding(lines);
 
     /*
-     * Every costing is born a draft, whatever it is going to replace. Activating
-     * it is a separate act because it is the one that closes the version being
-     * quoted from, and that should never be a side effect of typing figures in.
+     * A saved costing is in force from the day it is saved. There is no draft
+     * and nothing to switch on: what is written applies, until the day it is
+     * revised. Anything already dated before that keeps the figures it was
+     * quoted at, because those live on the occurrence, not here.
      */
     const costing = await this.prisma.$transaction(async (tx) => {
       const created = await tx.eventCosting.create({
         data: {
           eventTypeId: dto.eventTypeId,
           slotId: dto.slotId ?? null,
-          effectiveFrom: asDate(dto.effectiveFrom),
-          status: CostingStatus.draft,
-          sponsorAmount: dto.sponsorAmount,
-          incomeAccountId: dto.incomeAccountId,
-          incomeFundId: dto.incomeFundId,
+          effectiveFrom: dto.effectiveFrom ? asDate(dto.effectiveFrom) : today(),
+          sponsorAmount: chargedTotal(lines),
           notes: dto.notes ?? null,
           createdBy: context.actor.id,
         },
       });
 
-      await this.writeLines(tx, created.id, dto.lines);
+      await this.writeLines(tx, created.id, lines, coding);
 
       return created;
     });
@@ -160,12 +199,24 @@ export class EventCostingsService {
       action: 'create',
       entity: 'event_costing',
       entityRef: String(costing.id),
-      summary: `Drafted a costing quoting ${toRupees(costing.sponsorAmount)} from ${dto.effectiveFrom}`,
+      summary:
+        `Costed ${await this.scopeName(dto.eventTypeId, dto.slotId ?? null)} at ` +
+        `${toRupees(costing.sponsorAmount)} from ${isoDate(costing.effectiveFrom)}`,
     });
 
     return this.findOneOrFail(costing.id);
   }
 
+  /**
+   * Revise a costing, versioning it where it has already been quoted from.
+   *
+   * Nothing is put into force and nothing is switched over. A costing nobody
+   * has used yet is simply corrected. One that has priced an occurrence is
+   * closed the day before today and its successor opened today, so that the
+   * family quoted last year goes on being owed what they were told while every
+   * date from here reads the new figure. The temple asked for one act — save —
+   * and this is what has to happen underneath for that act to be honest.
+   */
   async update(
     id: number,
     dto: UpdateCostingDto,
@@ -173,135 +224,84 @@ export class EventCostingsService {
   ): Promise<CostingRecordDto> {
     const before = await this.load(id);
 
-    await this.assertRevisable(before);
-
-    if (dto.incomeAccountId || dto.incomeFundId) {
-      await this.assertIncomeCoding(
-        dto.incomeAccountId ?? before.incomeAccountId,
-        dto.incomeFundId ?? before.incomeFundId,
+    if (before.effectiveTo !== null) {
+      throw new ConflictException(
+        'That version was replaced by a later one and is kept as history. ' +
+          'Edit the version in force, or copy this one to start again from it',
       );
     }
 
     if (dto.lines) await this.assertLineCoding(dto.lines);
 
-    await this.prisma.$transaction(async (tx) => {
-      await tx.eventCosting.update({
-        where: { id },
-        data: {
-          effectiveFrom: dto.effectiveFrom ? asDate(dto.effectiveFrom) : undefined,
-          sponsorAmount: dto.sponsorAmount,
-          incomeAccountId: dto.incomeAccountId,
-          incomeFundId: dto.incomeFundId,
-          notes: dto.notes,
-        },
-      });
+    const coding = await this.codingFor(before.eventTypeId);
+    const lines = dto.lines ?? this.linesFrom(before);
+    const quoted = chargedTotal(lines);
 
-      if (dto.lines) {
-        // Children go with their parents through the cascade, so the whole
-        // costing is rewritten rather than reconciled row by row.
-        await tx.eventCostingLine.deleteMany({ where: { costingId: id } });
-        await this.writeLines(tx, id, dto.lines);
-      }
-    });
+    const used = await this.usage(id);
+    const startedToday = isoDate(before.effectiveFrom) >= isoDate(today());
 
-    const after = await this.load(id);
+    /*
+     * Same-day corrections stay in place even once something has been costed
+     * from them: the version has nowhere to be closed to that would not overlap
+     * its successor, and a costing still being set up this morning is being
+     * corrected rather than revised.
+     */
+    const versions = used > 0 && !startedToday;
 
-    await this.audit.record(context, {
-      action: 'update',
-      entity: 'event_costing',
-      entityRef: String(id),
-      summary: `Revised the costing for ${this.scopeLabel(before)}`,
-      diff: AuditService.diff(
-        {
-          effectiveFrom: before.effectiveFrom,
-          sponsorAmount: before.sponsorAmount,
-          incomeAccountId: before.incomeAccountId,
-          lineCount: before.lines.length,
-        },
-        {
-          effectiveFrom: after.effectiveFrom,
-          sponsorAmount: after.sponsorAmount,
-          incomeAccountId: after.incomeAccountId,
-          lineCount: after.lines.length,
-        },
-      ),
-    });
-
-    return this.findOneOrFail(id);
-  }
-
-  /**
-   * Put a draft into force, closing the version it replaces.
-   *
-   * The old version is not deleted and its figures are not touched: it is the
-   * answer to what a pooja cost in 2024, and occurrences dated against it go on
-   * pointing at it. It is closed the day before the new one opens, so that no
-   * date falls into both and none falls between them.
-   */
-  async activate(id: number, context: ActorContext): Promise<CostingRecordDto> {
-    const costing = await this.load(id);
-
-    if (costing.status !== CostingStatus.draft) {
-      throw new ConflictException(`That costing is already ${costing.status}`);
-    }
-
-    if (costing.lines.length === 0) {
-      throw new ConflictException('A costing with no lines cannot be put into force');
-    }
-
-    const standing = await this.prisma.eventCosting.findFirst({
-      where: {
-        eventTypeId: costing.eventTypeId,
-        slotId: costing.slotId,
-        status: CostingStatus.active,
-      },
-    });
-
-    if (standing && standing.effectiveFrom >= costing.effectiveFrom) {
-      throw new BadRequestException(
-        `The costing in force starts on ${isoDate(standing.effectiveFrom)}; ` +
-          'a version replacing it must start after that',
-      );
-    }
-
-    await this.prisma.$transaction(async (tx) => {
-      // Closed first: the exclusion constraint is checked as each statement
-      // runs, and the two versions would otherwise both claim the same day.
-      if (standing) {
+    const targetId = await this.prisma.$transaction(async (tx) => {
+      if (!versions) {
         await tx.eventCosting.update({
-          where: { id: standing.id },
-          data: {
-            effectiveTo: dayBefore(costing.effectiveFrom),
-            status: CostingStatus.superseded,
-          },
+          where: { id },
+          data: { notes: dto.notes, sponsorAmount: quoted },
         });
+
+        if (dto.lines) {
+          await tx.eventCostingLine.deleteMany({ where: { costingId: id } });
+          await this.writeLines(tx, id, dto.lines, coding);
+        }
+
+        return id;
       }
 
       await tx.eventCosting.update({
         where: { id },
-        data: { status: CostingStatus.active },
+        data: { effectiveTo: dayBefore(today()) },
       });
+
+      const successor = await tx.eventCosting.create({
+        data: {
+          eventTypeId: before.eventTypeId,
+          slotId: before.slotId,
+          effectiveFrom: today(),
+          sponsorAmount: quoted,
+          notes: dto.notes === undefined ? before.notes : (dto.notes ?? null),
+          createdBy: context.actor.id,
+        },
+      });
+
+      await this.writeLines(tx, successor.id, lines, coding);
+
+      return successor.id;
     });
 
     await this.audit.record(context, {
       action: 'update',
       entity: 'event_costing',
-      entityRef: String(id),
-      summary:
-        `Put the costing for ${this.scopeLabel(costing)} into force from ` +
-        `${isoDate(costing.effectiveFrom)}, quoting ${toRupees(costing.sponsorAmount)}` +
-        (standing ? ` in place of costing ${standing.id}` : ''),
+      entityRef: String(targetId),
+      summary: versions
+        ? `Revised ${this.scopeLabel(before)} to ${toRupees(quoted)} from ${isoDate(today())}; ` +
+          `costing ${id} kept as history for the ${used} occurrence(s) quoted from it`
+        : `Corrected the costing for ${this.scopeLabel(before)} to ${toRupees(quoted)}`,
     });
 
-    return this.findOneOrFail(id);
+    return this.findOneOrFail(targetId);
   }
 
   /**
    * Day two of a festival is day one with three figures changed.
    *
-   * The copy lands as a draft on the slot named, carrying every line and its
-   * itemisation, so the work is correcting what differs rather than retyping
-   * what does not.
+   * The copy carries every line and its itemisation onto the slot named, so the
+   * work left is correcting what differs rather than retyping what does not.
    */
   async copy(id: number, dto: CopyCostingDto, context: ActorContext): Promise<CostingRecordDto> {
     const source = await this.load(id);
@@ -309,36 +309,13 @@ export class EventCostingsService {
 
     await this.assertScope(source.eventTypeId, slotId);
 
-    const headings = source.lines.filter((line) => line.parentLineId === null);
-
-    const lines: WriteCostingLineDto[] = headings.map((heading) => ({
-      accountId: heading.accountId,
-      fundId: heading.fundId,
-      activityId: heading.activityId,
-      partyId: heading.partyId,
-      label: heading.label,
-      amount: toRupees(heading.amount),
-      chargedToSponsor: heading.chargedToSponsor,
-      items: source.lines
-        .filter((line) => line.parentLineId === heading.id)
-        .map((item) => ({
-          label: item.label ?? '',
-          amount: toRupees(item.amount),
-          quantity: toRupeesOrNull(item.quantity),
-          unitAmount: toRupeesOrNull(item.unitAmount),
-        })),
-    }));
-
     const created = await this.create(
       {
         eventTypeId: source.eventTypeId,
         slotId,
-        effectiveFrom: dto.effectiveFrom ?? isoDate(source.effectiveFrom),
-        sponsorAmount: toRupees(source.sponsorAmount),
-        incomeAccountId: source.incomeAccountId,
-        incomeFundId: source.incomeFundId,
+        effectiveFrom: dto.effectiveFrom ?? isoDate(today()),
         notes: source.notes,
-        lines,
+        lines: this.linesFrom(source),
       },
       context,
     );
@@ -363,9 +340,10 @@ export class EventCostingsService {
       );
     }
 
-    if (costing.status === CostingStatus.active) {
+    if (costing.effectiveTo !== null) {
       throw new ConflictException(
-        'That costing is in force. Draft its replacement and put that into force instead',
+        'That version was replaced by a later one. It is the answer to what this ' +
+          'pooja cost that year, and the year-by-year report is read from it',
       );
     }
 
@@ -384,14 +362,16 @@ export class EventCostingsService {
   /**
    * Headings first, then the items under each.
    *
-   * Items inherit the heading's coding rather than carrying their own, and are
-   * numbered in the same sequence as the headings so that `line_no` orders the
-   * whole document the way it is read.
+   * The fund and the activity are not written from the form — they are the
+   * pooja type's own, carried down onto every line so that a report never has
+   * to ask the costing where its money is held. An item's amount follows from
+   * its quantity and unit price; a heading with items is their sum.
    */
   private async writeLines(
     tx: Prisma.TransactionClient,
     costingId: number,
     lines: readonly WriteCostingLineDto[],
+    coding: PoojaCoding,
   ): Promise<void> {
     let lineNo = 0;
 
@@ -404,10 +384,10 @@ export class EventCostingsService {
           lineNo,
           label: heading.label ?? null,
           accountId: heading.accountId,
-          fundId: heading.fundId,
-          activityId: heading.activityId ?? null,
+          fundId: coding.fundId,
+          activityId: coding.activityId,
           partyId: heading.partyId ?? null,
-          amount: heading.amount,
+          amount: lineAmount(heading),
           chargedToSponsor: heading.chargedToSponsor ?? true,
         },
       });
@@ -422,12 +402,12 @@ export class EventCostingsService {
             lineNo,
             label: item.label,
             accountId: heading.accountId,
-            fundId: heading.fundId,
-            activityId: heading.activityId ?? null,
+            fundId: coding.fundId,
+            activityId: coding.activityId,
             partyId: heading.partyId ?? null,
-            amount: item.amount,
-            quantity: item.quantity ?? null,
-            unitAmount: item.unitAmount ?? null,
+            amount: money(item.quantity).times(money(item.unitAmount)).toDecimalPlaces(2),
+            quantity: item.quantity,
+            unitAmount: item.unitAmount,
             chargedToSponsor: heading.chargedToSponsor ?? true,
           },
         });
@@ -435,28 +415,45 @@ export class EventCostingsService {
     }
   }
 
-  // ── rules ─────────────────────────────────────────────────────────────────
+  /** A stored costing's lines, in the shape they are written back in. */
+  private linesFrom(costing: CostingRow): WriteCostingLineDto[] {
+    return costing.lines
+      .filter((line) => line.parentLineId === null)
+      .map((heading) => ({
+        accountId: heading.accountId,
+        partyId: heading.partyId,
+        label: heading.label,
+        amount: toRupees(heading.amount),
+        chargedToSponsor: heading.chargedToSponsor,
+        items: costing.lines
+          .filter((line) => line.parentLineId === heading.id)
+          .map((item) => ({
+            label: item.label ?? '',
+            quantity: toRupees(item.quantity ?? 0),
+            unitAmount: toRupees(item.unitAmount ?? 0),
+          })),
+      }));
+  }
 
   /**
-   * A costing may be revised until an occurrence has been costed from it.
+   * The head and fund a pooja's money is coded to, read from its activity.
    *
-   * After that its figures are what somebody was quoted, so the way to change
-   * them is a new version — which leaves the old one readable beside it.
+   * Null when the temple has not answered it yet, which the screens report
+   * rather than guess at: coding a sponsor's receipt to the wrong head is the
+   * kind of mistake that is only found at the year end.
    */
-  private async assertRevisable(costing: CostingRow): Promise<void> {
-    const used = await this.usage(costing.id);
+  async codingFor(eventTypeId: number): Promise<PoojaCoding> {
+    const type = await this.prisma.eventType.findUnique({
+      where: { id: eventTypeId },
+      include: { activity: true },
+    });
 
-    if (used > 0) {
-      throw new ConflictException(
-        `${used} occurrence(s) were costed from this version. ` +
-          'Draft a replacement and put it into force from the date the new rate applies',
-      );
-    }
+    if (!type) throw new NotFoundException(`Event type ${eventTypeId} was not found`);
 
-    if (costing.status === CostingStatus.superseded) {
-      throw new ConflictException('A superseded costing is history and cannot be revised');
-    }
+    return requireCoding(readCoding(type.activity), type.nameTa, type.activityId !== null);
   }
+
+  // ── rules ─────────────────────────────────────────────────────────────────
 
   private async assertScope(eventTypeId: number, slotId: number | null): Promise<void> {
     const type = await this.prisma.eventType.findUnique({ where: { id: eventTypeId } });
@@ -472,24 +469,6 @@ export class EventCostingsService {
     if (slot.eventTypeId !== eventTypeId) {
       throw new BadRequestException(`Slot ${slotId} does not belong to ${type.nameTa}`);
     }
-  }
-
-  private async assertIncomeCoding(accountId: number, fundId: number): Promise<void> {
-    const account = await this.prisma.account.findUnique({ where: { id: accountId } });
-
-    if (!account) throw new NotFoundException(`Account ${accountId} was not found`);
-
-    if (account.type !== AccountType.income) {
-      throw new BadRequestException(
-        `A sponsor's receipt must name an income head; ${account.code} is ${account.type}`,
-      );
-    }
-
-    if (!account.isPostable) {
-      throw new BadRequestException(`${account.code} is a grouping head; name one of its children`);
-    }
-
-    await this.assertFundIsOpen(fundId);
   }
 
   /**
@@ -523,22 +502,6 @@ export class EventCostingsService {
         throw new BadRequestException(`${account.code} is no longer in use${where}`);
       }
 
-      await this.assertFundIsOpen(line.fundId, where);
-
-      if (line.activityId) {
-        const activity = await this.prisma.activity.findUnique({
-          where: { id: line.activityId },
-        });
-
-        if (!activity) {
-          throw new NotFoundException(`Activity ${line.activityId} was not found${where}`);
-        }
-
-        if (!activity.isActive) {
-          throw new BadRequestException(`${activity.nameTa} is no longer an activity${where}`);
-        }
-      }
-
       if (line.partyId) {
         const party = await this.prisma.party.findUnique({ where: { id: line.partyId } });
 
@@ -547,35 +510,7 @@ export class EventCostingsService {
           throw new BadRequestException(`${party.nameTa} is no longer active${where}`);
         }
       }
-
-      this.assertItemsAddUp(line, where);
     }
-  }
-
-  /**
-   * A heading equals the items under it.
-   *
-   * The database enforces this too, at commit; catching it here is what turns
-   * "check_violation" into a sentence naming the line and both figures.
-   */
-  private assertItemsAddUp(line: WriteCostingLineDto, where: string): void {
-    if (!line.items || line.items.length === 0) return;
-
-    const items = line.items.reduce((total, item) => total.plus(money(item.amount)), money(0));
-
-    if (!items.equals(money(line.amount))) {
-      throw new BadRequestException(
-        `The heading${where} is ${toRupees(line.amount)}, ` +
-          `but the items under it come to ${toRupees(items)}`,
-      );
-    }
-  }
-
-  private async assertFundIsOpen(fundId: number, where = ''): Promise<void> {
-    const fund = await this.prisma.fund.findUnique({ where: { id: fundId } });
-
-    if (!fund) throw new NotFoundException(`Fund ${fundId} was not found${where}`);
-    if (!fund.isActive) throw new BadRequestException(`Fund ${fund.nameTa} is closed${where}`);
   }
 
   // ── reading ───────────────────────────────────────────────────────────────
@@ -616,6 +551,26 @@ export class EventCostingsService {
       .reduce((total, line) => total.plus(line.amount), money(0));
   }
 
+  /** The scope in words, before a costing row exists to read it from. */
+  private async scopeName(eventTypeId: number, slotId: number | null): Promise<string> {
+    const type = await this.prisma.eventType.findUnique({ where: { id: eventTypeId } });
+
+    if (!slotId) return type?.nameTa ?? `Event type ${eventTypeId}`;
+
+    const slot = await this.prisma.eventSlot.findUnique({
+      where: { id: slotId },
+      include: { eventType: true },
+    });
+
+    if (!slot) return type?.nameTa ?? `Event type ${eventTypeId}`;
+
+    return `${slot.eventType.nameTa} — ${describeInstance(
+      slot.eventType.frequencyType,
+      slot.instanceIdentifier,
+      slot.customInstanceName,
+    )}`;
+  }
+
   private scopeLabel(costing: CostingRow): string {
     if (!costing.slot) return costing.eventType.nameTa;
 
@@ -632,9 +587,12 @@ export class EventCostingsService {
     const headings = costing.lines.filter((line) => line.parentLineId === null);
 
     const expenseTotal = this.headingTotal(costing.lines);
-    const chargedTotal = headings
+    const chargedSum = headings
       .filter((line) => line.chargedToSponsor)
       .reduce((total, line) => total.plus(line.amount), money(0));
+
+    const coding = readCoding(costing.eventType.activity);
+    const activity = costing.eventType.activity;
 
     return {
       id: costing.id,
@@ -650,15 +608,22 @@ export class EventCostingsService {
         : null,
       effectiveFrom: isoDate(costing.effectiveFrom),
       effectiveTo: costing.effectiveTo ? isoDate(costing.effectiveTo) : null,
-      status: costing.status,
+      // Nothing switches a costing on: the one still open is the one in force.
+      isInForce: costing.effectiveTo === null,
       sponsorAmount: toRupees(costing.sponsorAmount),
-      incomeAccountId: costing.incomeAccountId,
-      incomeFundId: costing.incomeFundId,
+      incomeAccountId: coding?.accountId ?? null,
+      incomeAccountName: activity?.defaultAccount
+        ? `${activity.defaultAccount.code} · ${activity.defaultAccount.nameEn ?? activity.defaultAccount.nameTa}`
+        : null,
+      incomeFundId: coding?.fundId ?? null,
+      codingProblem: coding
+        ? null
+        : explainMissingCoding(costing.eventType.nameTa, costing.eventType.activityId !== null),
       notes: costing.notes,
       lines: headings.map((heading) => this.toLine(heading, costing.lines)),
       expenseTotal: toRupees(expenseTotal),
-      chargedTotal: toRupees(chargedTotal),
-      templeShare: toRupees(money(costing.sponsorAmount).minus(chargedTotal)),
+      chargedTotal: toRupees(chargedSum),
+      templeShare: toRupees(expenseTotal.minus(chargedSum)),
       usedByEvents,
       createdAt: costing.createdAt,
       updatedAt: costing.updatedAt,
@@ -672,9 +637,9 @@ export class EventCostingsService {
         id: item.id,
         lineNo: item.lineNo,
         label: item.label ?? '',
+        quantity: toRupees(item.quantity ?? 0),
+        unitAmount: toRupees(item.unitAmount ?? 0),
         amount: toRupees(item.amount),
-        quantity: toRupeesOrNull(item.quantity),
-        unitAmount: toRupeesOrNull(item.unitAmount),
       }));
 
     return {

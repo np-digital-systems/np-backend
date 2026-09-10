@@ -12,8 +12,8 @@ export interface CostingScope {
   /** Null covers every slot of the type. */
   slotId: number | null;
   effectiveFrom: Date;
+  /** Null means still in force; a date means a later version replaced it. */
   effectiveTo: Date | null;
-  status: 'draft' | 'active' | 'superseded';
 }
 
 const isoDate = (value: Date): string => value.toISOString().slice(0, 10);
@@ -36,17 +36,15 @@ export function covers(costing: CostingScope, on: Date): boolean {
  * carry its own: without that order, an ordinary day's figures would quietly
  * price the biggest day of the year.
  *
- * Drafts never apply. They exist so next year's revision can be written and
- * argued over while the version in force goes on being quoted.
+ * Every saved costing counts. There is no holding one back: what is written is
+ * what applies, until the day it is revised.
  */
 export function resolveCosting<T extends CostingScope>(
   candidates: readonly T[],
   slotId: number,
   on: Date,
 ): T | null {
-  const eligible = candidates.filter(
-    (costing) => costing.status !== 'draft' && covers(costing, on),
-  );
+  const eligible = candidates.filter((costing) => covers(costing, on));
 
   const forThisSlot = eligible.filter((costing) => costing.slotId === slotId);
   const forTheType = eligible.filter((costing) => costing.slotId === null);
@@ -55,10 +53,10 @@ export function resolveCosting<T extends CostingScope>(
 }
 
 /**
- * The exclusion constraint permits one non-draft per scope per day, so this
- * only ever picks between rows that cannot both cover the same date. It settles
- * the tie deterministically anyway: a resolver that could return either row is
- * a resolver whose output nobody can reproduce from the data.
+ * The exclusion constraint permits one version per scope per day, so this only
+ * ever picks between rows that cannot both cover the same date. It settles the
+ * tie deterministically anyway: a resolver that could return either row is a
+ * resolver whose output nobody can reproduce from the data.
  */
 function mostRecent<T extends CostingScope>(candidates: readonly T[]): T | null {
   if (candidates.length === 0) return null;
