@@ -73,6 +73,30 @@ export class EventBudgetDto {
   problem!: string | null;
 }
 
+/** One head this occurrence is expected to spend on. */
+export class ExpectedLineDto {
+  @ApiProperty() accountId!: number;
+  @ApiProperty() label!: string;
+  @ApiProperty() amount!: number;
+}
+
+/**
+ * What an occurrence is expected to cost, for a form filling itself in.
+ *
+ * Answered from the frozen budget where the day has been costed, and from the
+ * costing in force where it has not. A form has no business preferring one to
+ * the other: a day already quoted is owed the figure it was quoted at, and one
+ * that has not been quoted yet is owed today's rate.
+ */
+export class ExpectedAmountsDto {
+  @ApiProperty({ description: 'Whether these come from the day’s frozen budget' })
+  costed!: boolean;
+  @ApiProperty({ nullable: true, description: 'What the sponsor is asked for' })
+  sponsorAmount!: number | null;
+  @ApiProperty({ type: () => [ExpectedLineDto] })
+  lines!: ExpectedLineDto[];
+}
+
 /** Where the money went, on a voucher raised from a budget. */
 export class MovementDto {
   @ApiPropertyOptional({ description: 'Defaults to today' })
