@@ -1,8 +1,8 @@
 generator client {
-  provider     = "prisma-client"
-  output       = "../src/generated/prisma"
-  moduleFormat = "cjs"
-  runtime      = "nodejs"
+  provider            = "prisma-client"
+  output              = "../src/generated/prisma"
+  moduleFormat        = "cjs"
+  runtime             = "nodejs"
   importFileExtension = ""
 }
 
@@ -168,6 +168,16 @@ enum EventFunding {
   @@map("event_funding")
 }
 
+/// Where a costing stands. A draft may sit beside the version in force while
+/// the committee argues over it; only one non-draft may cover a scope at a time.
+enum CostingStatus {
+  draft
+  active
+  superseded
+
+  @@map("costing_status")
+}
+
 enum FinancialYearStatus {
   open
   closed
@@ -241,6 +251,8 @@ model Party {
   defaultForAccounts   Account[]          @relation("AccountDefaultParty")
   sponsorships         EventTypeSponsor[]
   eventsSponsored      Event[]
+  costingLines         EventCostingLine[]
+  eventBudgetLines     EventBudgetLine[]
 
   @@index([isActive], map: "parties_active")
   @@index([type], map: "parties_type")
@@ -302,9 +314,9 @@ model SanththaPayment {
   collectedBy      String      @map("collected_by") @db.Uuid
   createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  sponsor          Sponsor     @relation(fields: [sponsorId], references: [partyId])
-  collectedByUser  UserAccount @relation("SanththaCollector", fields: [collectedBy], references: [id])
-  receiptVoucher   Voucher?    @relation(fields: [receiptVoucherId], references: [id])
+  sponsor         Sponsor     @relation(fields: [sponsorId], references: [partyId])
+  collectedByUser UserAccount @relation("SanththaCollector", fields: [collectedBy], references: [id])
+  receiptVoucher  Voucher?    @relation(fields: [receiptVoucherId], references: [id])
 
   @@unique([sponsorId, year], map: "one_payment_per_sponsor_per_year")
   @@index([year], map: "payments_year")
@@ -335,6 +347,7 @@ model UserAccount {
   auditEntries        AuditLog[]
   notifications       NotificationRecipient[]
   settingsUpdated     Setting[]
+  costingsAuthored    EventCosting[]
 
   @@index([role], map: "user_accounts_role")
   @@map("user_accounts")
@@ -438,13 +451,16 @@ model Account {
   defaultPartyId Int?        @map("default_party_id")
   createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  parent               Account?      @relation("AccountTree", fields: [parentId], references: [id])
-  children             Account[]     @relation("AccountTree")
-  defaultParty         Party?        @relation("AccountDefaultParty", fields: [defaultPartyId], references: [id])
+  parent               Account?           @relation("AccountTree", fields: [parentId], references: [id])
+  children             Account[]          @relation("AccountTree")
+  defaultParty         Party?             @relation("AccountDefaultParty", fields: [defaultPartyId], references: [id])
   bankAccount          BankAccount?
   voucherLines         VoucherLine[]
   ledgerLines          LedgerEntry[]
-  defaultForActivities Activity[]    @relation("ActivityDefaultAccount")
+  defaultForActivities Activity[]         @relation("ActivityDefaultAccount")
+  costingIncomeFor     EventCosting[]     @relation("CostingIncome")
+  costingLines         EventCostingLine[]
+  eventBudgetLines     EventBudgetLine[]
 
   @@index([parentId], map: "accounts_parent")
   @@index([defaultPartyId], map: "accounts_default_party")
@@ -465,6 +481,9 @@ model Fund {
   deposits     FixedDeposit[]
   assets       Asset[]
   activities   Activity[]
+  costingLines EventCostingLine[]
+  budgetLines  EventBudgetLine[]
+  costings     EventCosting[]
 
   @@map("funds")
 }
@@ -516,6 +535,8 @@ model Activity {
   eventTypes   EventType[]
   voucherLines VoucherLine[]
   ledgerLines  LedgerEntry[]
+  costingLines EventCostingLine[]
+  budgetLines  EventBudgetLine[]
 
   @@index([kind, isActive], map: "activities_kind")
   @@index([defaultFundId], map: "activities_default_fund")
@@ -573,12 +594,12 @@ model Voucher {
   rejectionReason String?       @map("rejection_reason")
   postedAt        DateTime?     @map("posted_at") @db.Timestamptz(6)
 
-  financialYear   FinancialYear     @relation(fields: [financialYearId], references: [id])
-  partyRef        Party?            @relation(fields: [partyId], references: [id])
-  bankAccount     BankAccount?      @relation(fields: [bankAccountId], references: [id])
+  financialYear   FinancialYear    @relation(fields: [financialYearId], references: [id])
+  partyRef        Party?           @relation(fields: [partyId], references: [id])
+  bankAccount     BankAccount?     @relation(fields: [bankAccountId], references: [id])
   lines           VoucherLine[]
-  createdByUser   UserAccount       @relation("VoucherCreatedBy", fields: [createdBy], references: [id])
-  decidedByUser   UserAccount?      @relation("VoucherDecidedBy", fields: [decidedBy], references: [id])
+  createdByUser   UserAccount      @relation("VoucherCreatedBy", fields: [createdBy], references: [id])
+  decidedByUser   UserAccount?     @relation("VoucherDecidedBy", fields: [decidedBy], references: [id])
   ledgerEntries   LedgerEntry[]
   sanththaPayment SanththaPayment?
 
@@ -595,15 +616,15 @@ model Voucher {
 /// receipt credits income and every line of a payment debits expenditure, which
 /// follows from `voucher.kind`.
 model VoucherLine {
-  id         BigInt   @id @default(autoincrement())
-  voucherId  BigInt   @map("voucher_id")
-  lineNo     Int      @map("line_no") @db.SmallInt
-  accountId  Int      @map("account_id")
-  amount     Decimal  @db.Decimal(14, 2)
-  fundId     Int      @map("fund_id")
-  projectId  Int?     @map("project_id")
-  activityId Int?     @map("activity_id")
-  eventId    Int?     @map("event_id")
+  id         BigInt  @id @default(autoincrement())
+  voucherId  BigInt  @map("voucher_id")
+  lineNo     Int     @map("line_no") @db.SmallInt
+  accountId  Int     @map("account_id")
+  amount     Decimal @db.Decimal(14, 2)
+  fundId     Int     @map("fund_id")
+  projectId  Int?    @map("project_id")
+  activityId Int?    @map("activity_id")
+  eventId    Int?    @map("event_id")
 
   voucher  Voucher   @relation(fields: [voucherId], references: [id], onDelete: Cascade)
   account  Account   @relation(fields: [accountId], references: [id])
@@ -737,6 +758,7 @@ model EventType {
   activity Activity? @relation(fields: [activityId], references: [id])
 
   slots    EventSlot[]
+  costings EventCosting[]
 
   @@index([activityId], map: "event_types_activity")
   @@index([funding], map: "event_types_funding")
@@ -755,6 +777,7 @@ model EventSlot {
   eventType EventType          @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
   sponsors  EventTypeSponsor[]
   events    Event[]
+  costings  EventCosting[]
 
   @@unique([eventTypeId, instanceIdentifier], map: "one_slot_per_instance")
   @@map("event_slots")
@@ -785,13 +808,21 @@ model Event {
   startTime      DateTime  @map("start_time") @db.Time(6)
   endTime        DateTime? @map("end_time") @db.Time(6)
   sponsorPartyId Int?      @map("sponsor_party_id")
+  /// What the sponsor was quoted, frozen when the occurrence was costed. Null
+  /// until it is. Never recomputed: a rate revised in 2029 must not rewrite
+  /// what a family was told in 2026.
+  sponsorAmount  Decimal?  @map("sponsor_amount") @db.Decimal(12, 2)
+  /// Which costing the budget was taken from. Provenance; never read back.
+  costingId      Int?      @map("costing_id")
   notes          String?
   isCompleted    Boolean   @default(false) @map("is_completed")
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  slot         EventSlot     @relation(fields: [slotId], references: [id])
-  sponsor      Party?        @relation(fields: [sponsorPartyId], references: [id])
+  slot         EventSlot         @relation(fields: [slotId], references: [id])
+  sponsor      Party?            @relation(fields: [sponsorPartyId], references: [id])
+  costing      EventCosting?     @relation(fields: [costingId], references: [id])
+  budgetLines  EventBudgetLine[]
   voucherLines VoucherLine[]
   ledgerLines  LedgerEntry[]
 
@@ -799,7 +830,139 @@ model Event {
   // integrity migration; Prisma cannot express it.
   @@index([scheduledDate], map: "events_calendar")
   @@index([sponsorPartyId], map: "events_sponsor")
+  @@index([costingId], map: "events_costing")
   @@map("events")
+}
+
+/// What a pooja is expected to cost, and what its sponsor is asked for.
+///
+/// Held against a slot when one instance differs — Mahotsavam's தேர் day
+/// against an ordinary one — and against the type when they do not, so 52
+/// Fridays need one row and only the exceptions need their own. A costing is
+/// never edited in place once it has been used: the committee revises the rate
+/// by closing this version and opening the next, which is why the same slot's
+/// history reads as a series rather than a single figure.
+model EventCosting {
+  id              Int           @id @default(autoincrement())
+  eventTypeId     Int           @map("event_type_id")
+  /// Null covers every slot of the type. A row naming a slot wins over one
+  /// that does not — the resolution rule the whole model turns on.
+  slotId          Int?          @map("slot_id")
+  effectiveFrom   DateTime      @map("effective_from") @db.Date
+  /// Null means still in force. Closed by the version that succeeds it.
+  effectiveTo     DateTime?     @map("effective_to") @db.Date
+  status          CostingStatus @default(draft)
+  /// What the sponsor is quoted. Kept rather than summed on read: the temple
+  /// rounds the figure, and the difference is its own share of the day.
+  sponsorAmount   Decimal       @map("sponsor_amount") @db.Decimal(12, 2)
+  /// The head the sponsor's receipt lands on.
+  incomeAccountId Int           @map("income_account_id")
+  /// The fund that receipt is carried in.
+  incomeFundId    Int           @map("income_fund_id")
+  notes           String?
+  createdBy       String        @map("created_by") @db.Uuid
+  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  eventType     EventType          @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
+  slot          EventSlot?         @relation(fields: [slotId], references: [id], onDelete: Cascade)
+  incomeAccount Account            @relation("CostingIncome", fields: [incomeAccountId], references: [id])
+  incomeFund    Fund               @relation(fields: [incomeFundId], references: [id])
+  createdByUser UserAccount        @relation(fields: [createdBy], references: [id])
+  lines         EventCostingLine[]
+  events        Event[]
+
+  // `one_costing_per_scope_at_a_time`, an exclusion constraint over the date
+  // range, lives in the integrity migration; Prisma cannot express it.
+  @@index([eventTypeId, slotId], map: "costings_scope")
+  @@index([status], map: "costings_status")
+  @@index([incomeAccountId], map: "costings_income_account")
+  @@index([incomeFundId], map: "costings_income_fund")
+  @@index([createdBy], map: "costings_created_by")
+  @@map("event_costings")
+}
+
+/// One expected cost on a costing.
+///
+/// A line with children is a heading — pooja goods — and its children itemise
+/// it for the sponsor's quote: ten coconuts, two litres of milk. Only headings
+/// reach the ledger, so the chart of accounts stays the size the committee can
+/// actually read while the quote stays as detailed as a family wants it.
+model EventCostingLine {
+  id               Int      @id @default(autoincrement())
+  costingId        Int      @map("costing_id")
+  parentLineId     Int?     @map("parent_line_id")
+  lineNo           Int      @map("line_no") @db.SmallInt
+  /// Free text, and only on a child. A heading is named by its account.
+  label            String?
+  /// Carried on children too, equal to the parent's, so a report never has to
+  /// walk the tree to find out which head an item belongs under.
+  accountId        Int      @map("account_id")
+  fundId           Int      @map("fund_id")
+  activityId       Int?     @map("activity_id")
+  /// The melam group or the electrician usually paid. A default, not a rule.
+  partyId          Int?     @map("party_id")
+  amount           Decimal  @db.Decimal(12, 2)
+  /// Documentation for the quote — ten coconuts at 120. `amount` stays the truth.
+  quantity         Decimal? @db.Decimal(10, 3)
+  unitAmount       Decimal? @map("unit_amount") @db.Decimal(12, 2)
+  /// False for what the temple bears itself: the sponsor's quote passes over it,
+  /// while the day's budget and every report still count it.
+  chargedToSponsor Boolean  @default(true) @map("charged_to_sponsor")
+
+  costing  EventCosting       @relation(fields: [costingId], references: [id], onDelete: Cascade)
+  parent   EventCostingLine?  @relation("CostingLineTree", fields: [parentLineId], references: [id], onDelete: Cascade)
+  children EventCostingLine[] @relation("CostingLineTree")
+  account  Account            @relation(fields: [accountId], references: [id])
+  fund     Fund               @relation(fields: [fundId], references: [id])
+  activity Activity?          @relation(fields: [activityId], references: [id])
+  party    Party?             @relation(fields: [partyId], references: [id])
+
+  // `costing_parent_totals` — a heading equals the items under it — and
+  // `costing_child_matches_parent` live in the integrity migration.
+  @@unique([costingId, lineNo], map: "costing_line_no")
+  @@index([costingId], map: "costing_lines_costing")
+  @@index([parentLineId], map: "costing_lines_parent")
+  @@index([accountId], map: "costing_lines_account")
+  @@index([fundId], map: "costing_lines_fund")
+  @@index([activityId], map: "costing_lines_activity")
+  @@index([partyId], map: "costing_lines_party")
+  @@map("event_costing_lines")
+}
+
+/// The costing as it stood when this occurrence was scheduled.
+///
+/// Only headings are copied here — the itemisation belongs to the quote, not to
+/// the books. These rows are what the voucher forms fill themselves from and
+/// what the budget-against-actual report measures the ledger against, so they
+/// are deliberately independent of the costing they came from: revising the
+/// rate for 2029 leaves every occurrence already dated exactly as it was.
+model EventBudgetLine {
+  id               BigInt  @id @default(autoincrement())
+  eventId          Int     @map("event_id")
+  lineNo           Int     @map("line_no") @db.SmallInt
+  /// The heading as it read on the day, so a renamed account cannot rewrite it.
+  label            String
+  accountId        Int     @map("account_id")
+  fundId           Int     @map("fund_id")
+  activityId       Int?    @map("activity_id")
+  partyId          Int?    @map("party_id")
+  amount           Decimal @db.Decimal(12, 2)
+  chargedToSponsor Boolean @default(true) @map("charged_to_sponsor")
+
+  event    Event     @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  account  Account   @relation(fields: [accountId], references: [id])
+  fund     Fund      @relation(fields: [fundId], references: [id])
+  activity Activity? @relation(fields: [activityId], references: [id])
+  party    Party?    @relation(fields: [partyId], references: [id])
+
+  @@unique([eventId, lineNo], map: "budget_line_no")
+  @@index([eventId, accountId], map: "budget_lines_event_account")
+  @@index([accountId], map: "budget_lines_account")
+  @@index([fundId], map: "budget_lines_fund")
+  @@index([activityId], map: "budget_lines_activity")
+  @@index([partyId], map: "budget_lines_party")
+  @@map("event_budget_lines")
 }
 
 model AuditLog {
