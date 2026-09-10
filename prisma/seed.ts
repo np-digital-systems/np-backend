@@ -12,11 +12,36 @@ const prisma = new PrismaClient({
 
 const PERMISSION_GROUPS = [
   { code: 'dashboard', label: 'Dashboard', description: 'The portal landing view', sortOrder: 1 },
-  { code: 'accounting', label: 'Accounting', description: 'Vouchers, the ledger, books and bank accounts', sortOrder: 2 },
-  { code: 'finance', label: 'Funds and property', description: 'Funds, projects, deposits, assets and reports', sortOrder: 3 },
-  { code: 'events', label: 'Events', description: 'The calendar, event types and sponsorship', sortOrder: 4 },
-  { code: 'register', label: 'Sponsors and sanththa', description: 'The sponsor register and yearly subscriptions', sortOrder: 5 },
-  { code: 'administration', label: 'Administration', description: 'Sign-ins, roles, the audit trail and settings', sortOrder: 6 },
+  {
+    code: 'accounting',
+    label: 'Accounting',
+    description: 'Vouchers, the ledger, books and bank accounts',
+    sortOrder: 2,
+  },
+  {
+    code: 'finance',
+    label: 'Funds and property',
+    description: 'Funds, projects, deposits, assets and reports',
+    sortOrder: 3,
+  },
+  {
+    code: 'events',
+    label: 'Events',
+    description: 'The calendar, event types and sponsorship',
+    sortOrder: 4,
+  },
+  {
+    code: 'register',
+    label: 'Sponsors and sanththa',
+    description: 'The sponsor register and yearly subscriptions',
+    sortOrder: 5,
+  },
+  {
+    code: 'administration',
+    label: 'Administration',
+    description: 'Sign-ins, roles, the audit trail and settings',
+    sortOrder: 6,
+  },
 ];
 
 const PERMISSIONS = [
@@ -68,6 +93,8 @@ const PERMISSIONS = [
   ['event-schedule:view', 'events', 'View the yearly schedule'],
   ['event-sponsor:view', 'events', 'View sponsorship assignments'],
   ['event-sponsor:manage', 'events', 'Assign sponsors and see their contact details'],
+  ['event-costing:view', 'events', 'View what each pooja is expected to cost'],
+  ['event-costing:manage', 'events', 'Set and revise pooja costings, and cost a day'],
 
   ['sponsor:view', 'register', 'View the sponsor register'],
   ['sponsor:manage', 'register', 'Enrol sponsors and see their contact details'],
@@ -82,30 +109,81 @@ const PERMISSIONS = [
 ] as const;
 
 const ROLES = [
-  { code: AccountRole.admin, label: 'Administrator', description: 'Full access to the portal', isSystem: true, sortOrder: 1 },
-  { code: AccountRole.accountant, label: 'Accountant', description: 'Keeps the books and approves vouchers', isSystem: true, sortOrder: 2 },
-  { code: AccountRole.cashier, label: 'Cashier', description: 'Collects at the hundial and raises vouchers', isSystem: true, sortOrder: 3 },
+  {
+    code: AccountRole.admin,
+    label: 'Administrator',
+    description: 'Full access to the portal',
+    isSystem: true,
+    sortOrder: 1,
+  },
+  {
+    code: AccountRole.accountant,
+    label: 'Accountant',
+    description: 'Keeps the books and approves vouchers',
+    isSystem: true,
+    sortOrder: 2,
+  },
+  {
+    code: AccountRole.cashier,
+    label: 'Cashier',
+    description: 'Collects at the hundial and raises vouchers',
+    isSystem: true,
+    sortOrder: 3,
+  },
   // One self-service role for everyone outside staff. What a member sees is
   // derived from their party — sponsorships, payments — not from this.
-  { code: AccountRole.member, label: 'Member', description: 'A sponsor or devotee using the portal', isSystem: true, sortOrder: 4 },
+  {
+    code: AccountRole.member,
+    label: 'Member',
+    description: 'A sponsor or devotee using the portal',
+    isSystem: true,
+    sortOrder: 4,
+  },
 ];
 
 const ACCOUNTANT = [
   'dashboard:view',
-  'account:view', 'account:manage',
-  'activity:view', 'activity:manage',
-  'party:view', 'party:manage',
-  'transaction:view', 'transaction:create', 'transaction:export',
-  'receipt-voucher:view', 'receipt-voucher:create',
-  'payment-voucher:view', 'payment-voucher:create',
-  'voucher:create', 'voucher:submit', 'voucher:approve', 'voucher:post', 'voucher:manage-all',
-  'cash-book:view', 'bank-book:view', 'bank-account:view',
-  'fund:view', 'fund:manage', 'project:view', 'project:manage',
-  'fixed-deposit:view', 'asset:view', 'asset:manage', 'report:generate',
-  'event:view', 'event:export', 'event-schedule:view', 'event-sponsor:view',
+  'account:view',
+  'account:manage',
+  'activity:view',
+  'activity:manage',
+  'party:view',
+  'party:manage',
+  'transaction:view',
+  'transaction:create',
+  'transaction:export',
+  'receipt-voucher:view',
+  'receipt-voucher:create',
+  'payment-voucher:view',
+  'payment-voucher:create',
+  'voucher:create',
+  'voucher:submit',
+  'voucher:approve',
+  'voucher:post',
+  'voucher:manage-all',
+  'cash-book:view',
+  'bank-book:view',
+  'bank-account:view',
+  'fund:view',
+  'fund:manage',
+  'project:view',
+  'project:manage',
+  'fixed-deposit:view',
+  'asset:view',
+  'asset:manage',
+  'report:generate',
+  'event:view',
+  'event:export',
+  'event-schedule:view',
+  'event-sponsor:view',
+  'event-costing:view',
+  'event-costing:manage',
   'financial-year:view',
-  'sponsor:view', 'sponsor:manage',
-  'contribution:view', 'contribution:record', 'contribution:manage',
+  'sponsor:view',
+  'sponsor:manage',
+  'contribution:view',
+  'contribution:record',
+  'contribution:manage',
 ];
 
 /*
@@ -120,17 +198,29 @@ const ACCOUNTANT = [
  */
 const CASHIER = [
   'dashboard:view',
-  'account:view', 'fund:view', 'project:view', 'bank-account:view',
-  'activity:view', 'party:view',
-  'transaction:view', 'transaction:create',
-  'receipt-voucher:view', 'receipt-voucher:create',
-  'payment-voucher:view', 'payment-voucher:create',
-  'voucher:create', 'voucher:submit',
+  'account:view',
+  'fund:view',
+  'project:view',
+  'bank-account:view',
+  'activity:view',
+  'party:view',
+  'transaction:view',
+  'transaction:create',
+  'receipt-voucher:view',
+  'receipt-voucher:create',
+  'payment-voucher:view',
+  'payment-voucher:create',
+  'voucher:create',
+  'voucher:submit',
   'cash-book:view',
-  'event:view', 'event-schedule:view', 'event-sponsor:view',
+  'event:view',
+  'event-schedule:view',
+  'event-sponsor:view',
+  'event-costing:view',
   'financial-year:view',
   'sponsor:view',
-  'contribution:view', 'contribution:record',
+  'contribution:view',
+  'contribution:record',
 ];
 
 const ROLE_PERMISSIONS: Record<string, string[]> = {
@@ -151,21 +241,28 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
 const TRANSACTION_OPTIONS = { maxWait: 15_000, timeout: 120_000 };
 
 async function main(): Promise<void> {
-  await prisma.$transaction([
-    ...PERMISSION_GROUPS.map((group) =>
-      prisma.permissionGroup.upsert({ where: { code: group.code }, create: group, update: group }),
-    ),
-    ...PERMISSIONS.map(([code, groupCode, label], index) =>
-      prisma.permission.upsert({
-        where: { code },
-        create: { code, groupCode, label, sortOrder: index },
-        update: { groupCode, label, sortOrder: index },
-      }),
-    ),
-    ...ROLES.map((role) =>
-      prisma.role.upsert({ where: { code: role.code }, create: role, update: role }),
-    ),
-  ], TRANSACTION_OPTIONS);
+  await prisma.$transaction(
+    [
+      ...PERMISSION_GROUPS.map((group) =>
+        prisma.permissionGroup.upsert({
+          where: { code: group.code },
+          create: group,
+          update: group,
+        }),
+      ),
+      ...PERMISSIONS.map(([code, groupCode, label], index) =>
+        prisma.permission.upsert({
+          where: { code },
+          create: { code, groupCode, label, sortOrder: index },
+          update: { groupCode, label, sortOrder: index },
+        }),
+      ),
+      ...ROLES.map((role) =>
+        prisma.role.upsert({ where: { code: role.code }, create: role, update: role }),
+      ),
+    ],
+    TRANSACTION_OPTIONS,
+  );
 
   const codes = PERMISSIONS.map(([code]) => code);
 
@@ -175,15 +272,18 @@ async function main(): Promise<void> {
   });
 
   for (const [roleCode, permissions] of Object.entries(ROLE_PERMISSIONS)) {
-    await prisma.$transaction([
-      prisma.rolePermission.deleteMany({ where: { roleCode: roleCode as AccountRole } }),
-      prisma.rolePermission.createMany({
-        data: permissions.map((permissionCode) => ({
-          roleCode: roleCode as AccountRole,
-          permissionCode,
-        })),
-      }),
-    ], TRANSACTION_OPTIONS);
+    await prisma.$transaction(
+      [
+        prisma.rolePermission.deleteMany({ where: { roleCode: roleCode as AccountRole } }),
+        prisma.rolePermission.createMany({
+          data: permissions.map((permissionCode) => ({
+            roleCode: roleCode as AccountRole,
+            permissionCode,
+          })),
+        }),
+      ],
+      TRANSACTION_OPTIONS,
+    );
   }
 
   await prisma.setting.upsert({
