@@ -29,6 +29,7 @@
     "db:deploy": "prisma migrate deploy",
     "db:status": "prisma migrate status",
     "db:seed": "prisma db seed",
+    "db:seed:chart": "ts-node --swc prisma/seed-chart-of-accounts.ts",
     "db:studio": "prisma studio",
     "db:drift": "prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --exit-code"
   },
