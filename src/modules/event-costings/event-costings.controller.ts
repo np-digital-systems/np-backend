@@ -53,6 +53,13 @@ export class EventCostingsController {
     return this.costings.findOneOrFail(id);
   }
 
+  @Get(':id/history')
+  @RequirePermissions('event-costing:view')
+  @ApiOperation({ summary: 'Every version this pooja and instance has had, newest first' })
+  history(@Param('id', ParseIntPipe) id: number): Promise<CostingRecordDto[]> {
+    return this.costings.history(id);
+  }
+
   @Post()
   @RequirePermissions('event-costing:manage')
   @ApiOperation({ summary: 'Save a costing. It applies from the day it is saved' })
