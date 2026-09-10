@@ -208,9 +208,12 @@ export class EventBudgetsService {
       );
     }
 
-    const costing = await this.prisma.eventCosting.findUniqueOrThrow({
-      where: { id: event.costingId },
-    });
+    /*
+     * The head and the fund come from the pooja type's activity, the same place
+     * the voucher form would have taken them from had a clerk filled this in by
+     * hand. The costing never held them: one answer, one place.
+     */
+    const coding = await this.costings.codingFor(event.slot.eventTypeId);
 
     const voucher = await this.vouchers.create(
       {
@@ -225,10 +228,10 @@ export class EventBudgetsService {
         party: event.sponsor.nameTa,
         lines: [
           {
-            accountId: costing.incomeAccountId,
+            accountId: coding.accountId,
             amount: dto.amount ?? toRupees(event.sponsorAmount),
-            fundId: costing.incomeFundId,
-            activityId: event.slot.eventType.activityId ?? undefined,
+            fundId: coding.fundId,
+            activityId: coding.activityId,
             eventId,
           },
         ],
