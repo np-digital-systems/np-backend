@@ -309,14 +309,20 @@ async function main(): Promise<void> {
   const email = process.env.SEED_ADMIN_EMAIL ?? 'admin@kovil.lk';
   const password = process.env.SEED_ADMIN_PASSWORD ?? 'ChangeMe!2026';
 
-  // The register comes first: an account is granted to a party, never the other
-  // way round. Seeding in this order is the model in miniature.
-  const existing = await prisma.userAccount.findUnique({
-    where: { email },
-    select: { id: true },
-  });
+  /*
+   * The bootstrap admin exists to get into an empty portal, so it is created
+   * only when there is nobody at all.
+   *
+   * This used to look for the seed's own address and create the account when
+   * that address was absent — which meant re-running the seed against a live
+   * database, to pick up a new permission, minted a fresh administrator on a
+   * published default password beside the real staff. Whether the portal has
+   * an administrator is the question worth asking; whether it has this one is
+   * not.
+   */
+  const staffed = await prisma.userAccount.count();
 
-  if (!existing) {
+  if (staffed === 0) {
     const party = await prisma.party.create({
       data: {
         type: PartyType.person,
@@ -350,7 +356,10 @@ async function main(): Promise<void> {
 
   console.log(
     `Seeded ${PERMISSIONS.length} permissions across ${PERMISSION_GROUPS.length} groups, ` +
-      `${ROLES.length} roles, the ${year} sanththa rate and the admin account (${email}).`,
+      `${ROLES.length} roles and the ${year} sanththa rate. ` +
+      (staffed === 0
+        ? `Created the bootstrap admin account (${email}).`
+        : `Left the ${staffed} existing sign-in(s) alone.`),
   );
 }
 

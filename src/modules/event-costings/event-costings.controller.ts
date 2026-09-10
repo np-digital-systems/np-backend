@@ -55,7 +55,7 @@ export class EventCostingsController {
 
   @Post()
   @RequirePermissions('event-costing:manage')
-  @ApiOperation({ summary: 'Draft a costing; putting it into force is a separate act' })
+  @ApiOperation({ summary: 'Save a costing. It applies from the day it is saved' })
   create(@Body() dto: CreateCostingDto, @Actor() context: ActorContext): Promise<CostingRecordDto> {
     return this.costings.create(dto, context);
   }
@@ -71,19 +71,11 @@ export class EventCostingsController {
     return this.costings.copy(id, dto, context);
   }
 
-  @Post(':id/activate')
-  @RequirePermissions('event-costing:manage')
-  @ApiOperation({ summary: 'Put a draft into force, closing the version it replaces' })
-  activate(
-    @Param('id', ParseIntPipe) id: number,
-    @Actor() context: ActorContext,
-  ): Promise<CostingRecordDto> {
-    return this.costings.activate(id, context);
-  }
-
   @Patch(':id')
   @RequirePermissions('event-costing:manage')
-  @ApiOperation({ summary: 'Revise a costing nothing has been quoted from yet' })
+  @ApiOperation({
+    summary: 'Save a costing. One already quoted from is kept and its successor opened from today',
+  })
   update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateCostingDto,
@@ -95,7 +87,7 @@ export class EventCostingsController {
   @Delete(':id')
   @RequirePermissions('event-costing:manage')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @ApiOperation({ summary: 'Remove a version nothing was costed from' })
+  @ApiOperation({ summary: 'Remove a version nothing was costed from and nothing replaced' })
   remove(@Param('id', ParseIntPipe) id: number, @Actor() context: ActorContext): Promise<void> {
     return this.costings.remove(id, context);
   }

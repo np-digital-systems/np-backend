@@ -1,12 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   ArrayMaxSize,
-  ArrayMinSize,
   IsArray,
   IsBoolean,
   IsDateString,
-  IsEnum,
   IsInt,
   IsNumber,
   IsOptional,
@@ -17,17 +15,16 @@ import {
   ValidateNested,
 } from 'class-validator';
 
-import { CostingStatus } from '../../../generated/prisma/enums';
 import { AccountRefDto } from '../../accounts/dto/account.dto';
 
 /** One item under a heading — what the quote shows a family. */
 export class CostingItemDto {
   @ApiProperty() id!: number;
   @ApiProperty() lineNo!: number;
-  @ApiProperty({ description: 'Ten coconuts, two litres of milk' }) label!: string;
-  @ApiProperty() amount!: number;
-  @ApiProperty({ nullable: true }) quantity!: number | null;
-  @ApiProperty({ nullable: true }) unitAmount!: number | null;
+  @ApiProperty({ description: 'Coconut, milk, curd' }) label!: string;
+  @ApiProperty({ description: 'How many' }) quantity!: number;
+  @ApiProperty({ description: 'What one costs' }) unitAmount!: number;
+  @ApiProperty({ description: 'Quantity times the unit price' }) amount!: number;
 }
 
 /** One heading — the level that reaches the ledger. */
@@ -63,19 +60,29 @@ export class CostingRecordDto {
   @ApiProperty({ example: '2026-04-01' }) effectiveFrom!: string;
   @ApiProperty({ nullable: true, description: 'Null means still in force' })
   effectiveTo!: string | null;
-  @ApiProperty({ enum: CostingStatus }) status!: CostingStatus;
-  @ApiProperty({ description: 'What the sponsor is quoted' }) sponsorAmount!: number;
-  @ApiProperty() incomeAccountId!: number;
-  @ApiProperty() incomeFundId!: number;
+  @ApiProperty({ description: 'Whether this is the version being quoted from today' })
+  isInForce!: boolean;
+  @ApiProperty({ description: 'The lines charged to the sponsor, added up' })
+  sponsorAmount!: number;
+  @ApiProperty({
+    description: 'The income head the receipt lands on, from the pooja type’s activity',
+    nullable: true,
+  })
+  incomeAccountId!: number | null;
+  @ApiProperty({ nullable: true }) incomeAccountName!: string | null;
+  @ApiProperty({ nullable: true }) incomeFundId!: number | null;
+  @ApiProperty({
+    nullable: true,
+    description: 'Why a receipt cannot be raised for this pooja yet',
+  })
+  codingProblem!: string | null;
   @ApiProperty({ nullable: true }) notes!: string | null;
   @ApiProperty({ type: () => [CostingLineDto] }) lines!: CostingLineDto[];
   @ApiProperty({ description: 'What the day is expected to cost, in full' })
   expenseTotal!: number;
   @ApiProperty({ description: 'The part of that the sponsor is asked to carry' })
   chargedTotal!: number;
-  @ApiProperty({
-    description: 'Quote less what the sponsor carries — the temple’s own share, or its shortfall',
-  })
+  @ApiProperty({ description: 'What the temple bears itself — the lines not charged on' })
   templeShare!: number;
   @ApiProperty({
     description: 'Occurrences costed from this version; it is history once above zero',
@@ -86,38 +93,31 @@ export class CostingRecordDto {
 }
 
 export class WriteCostingItemDto {
-  @ApiProperty({ example: 'தேங்காய் 10' })
+  @ApiProperty({ example: 'தேங்காய்' })
   @IsString()
   @MaxLength(160)
   label!: string;
 
-  @ApiProperty({ minimum: 0.01 })
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @IsPositive()
-  amount!: number;
-
-  @ApiPropertyOptional({ description: 'Documentation for the quote; the amount stays the truth' })
-  @IsOptional()
+  @ApiProperty({ description: 'How many', minimum: 0.001 })
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 3 })
   @IsPositive()
-  quantity?: number | null;
+  quantity!: number;
 
-  @ApiPropertyOptional()
-  @IsOptional()
+  @ApiProperty({ description: 'What one costs', minimum: 0.01 })
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
-  unitAmount?: number | null;
+  unitAmount!: number;
 }
 
 /**
  * One expected cost as it is written.
  *
- * Items carry no coding of their own: they inherit the head, the fund, the
- * activity and the party of the heading they sit under, because an itemisation
- * that could be coded elsewhere would be a second set of books.
+ * There is no fund and no activity here: both come from the pooja type's own
+ * activity, which already answers them for every receipt the temple raises.
+ * Asking again would be a second place for the same fact to be kept, and the
+ * two would eventually disagree.
  */
 export class WriteCostingLineDto {
   @ApiProperty({ description: 'The expense head this lands on' })
@@ -125,19 +125,6 @@ export class WriteCostingLineDto {
   @IsInt()
   @Min(1)
   accountId!: number;
-
-  @ApiProperty()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  fundId!: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  activityId?: number | null;
 
   @ApiPropertyOptional({ description: 'Who is usually paid for this' })
   @IsOptional()
@@ -152,11 +139,15 @@ export class WriteCostingLineDto {
   @MaxLength(160)
   label?: string | null;
 
-  @ApiProperty({ minimum: 0.01, description: 'Must equal the items where there are any' })
+  @ApiPropertyOptional({
+    minimum: 0.01,
+    description: 'Ignored where there are items: the items decide the figure',
+  })
+  @IsOptional()
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
-  amount!: number;
+  amount?: number;
 
   @ApiPropertyOptional({ default: true })
   @IsOptional()
@@ -188,27 +179,13 @@ export class CreateCostingDto {
   @Min(1)
   slotId?: number | null;
 
-  @ApiProperty({ example: '2026-04-01' })
+  @ApiPropertyOptional({
+    description: 'Defaults to today. Occurrences from this date are quoted at this rate',
+    example: '2026-04-01',
+  })
+  @IsOptional()
   @IsDateString()
-  effectiveFrom!: string;
-
-  @ApiProperty({ description: 'What the sponsor is quoted', minimum: 0 })
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  sponsorAmount!: number;
-
-  @ApiProperty({ description: 'The income head the sponsor’s receipt lands on' })
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  incomeAccountId!: number;
-
-  @ApiProperty({ description: 'The fund that receipt is carried in' })
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  incomeFundId!: number;
+  effectiveFrom?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
@@ -216,13 +193,19 @@ export class CreateCostingDto {
   @MaxLength(2000)
   notes?: string | null;
 
-  @ApiProperty({ type: () => [WriteCostingLineDto] })
+  /*
+   * A costing may be saved with nothing in it. The lines are written on the
+   * editor that opens next, and demanding one here only to satisfy a rule of
+   * the API's own making is what put a single expense line on a dialog whose
+   * other five lived somewhere else.
+   */
+  @ApiPropertyOptional({ type: () => [WriteCostingLineDto] })
+  @IsOptional()
   @IsArray()
-  @ArrayMinSize(1)
   @ArrayMaxSize(80)
   @ValidateNested({ each: true })
   @Type(() => WriteCostingLineDto)
-  lines!: WriteCostingLineDto[];
+  lines?: WriteCostingLineDto[];
 }
 
 /**
@@ -231,34 +214,12 @@ export class CreateCostingDto {
  * Moving a costing from one slot to another would silently reprice every
  * occurrence already dated against both, so the scope is fixed at creation and
  * a costing for a different slot is a different costing.
+ *
+ * The quote is not here either. It is the lines charged to the sponsor, added
+ * up, and a figure that can be typed as well as calculated is a figure with two
+ * answers.
  */
 export class UpdateCostingDto {
-  @ApiPropertyOptional({ example: '2026-04-01' })
-  @IsOptional()
-  @IsDateString()
-  effectiveFrom?: string;
-
-  @ApiPropertyOptional({ minimum: 0 })
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
-  sponsorAmount?: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  incomeAccountId?: number;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  incomeFundId?: number;
-
   @ApiPropertyOptional()
   @IsOptional()
   @IsString()
@@ -271,7 +232,6 @@ export class UpdateCostingDto {
   })
   @IsOptional()
   @IsArray()
-  @ArrayMinSize(1)
   @ArrayMaxSize(80)
   @ValidateNested({ each: true })
   @Type(() => WriteCostingLineDto)
@@ -310,10 +270,11 @@ export class QueryCostingsDto {
   @Min(1)
   slotId?: number;
 
-  @ApiPropertyOptional({ enum: CostingStatus })
+  @ApiPropertyOptional({ description: 'Only the versions being quoted from today' })
   @IsOptional()
-  @IsEnum(CostingStatus)
-  status?: CostingStatus;
+  @Transform(({ value }: { value: unknown }) => value === 'true' || value === true)
+  @IsBoolean()
+  inForce?: boolean;
 
   @ApiPropertyOptional({
     description: 'Only versions in force on this date',

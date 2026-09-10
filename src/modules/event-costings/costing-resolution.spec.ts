@@ -4,7 +4,6 @@ const costing = (over: Partial<CostingScope> & Pick<CostingScope, 'id'>): Costin
   slotId: null,
   effectiveFrom: new Date('2026-04-01'),
   effectiveTo: null,
-  status: 'active',
   ...over,
 });
 
@@ -44,17 +43,22 @@ describe('resolveCosting', () => {
     expect(resolveCosting([typeWide, therDay], 3, on('2026-06-25'))?.id).toBe(1);
   });
 
-  it('never applies a draft, even where it is the only candidate', () => {
-    const draft = costing({ id: 1, slotId: 11, status: 'draft' });
+  it('applies a saved costing without anything having to switch it on', () => {
+    const saved = costing({ id: 1, slotId: 11 });
 
-    expect(resolveCosting([draft], 11, on('2026-06-25'))).toBeNull();
+    expect(resolveCosting([saved], 11, on('2026-06-25'))?.id).toBe(1);
   });
 
-  it('ignores a draft revision while the version in force still covers the date', () => {
-    const inForce = costing({ id: 1, effectiveFrom: on('2023-04-01') });
-    const nextYear = costing({ id: 2, effectiveFrom: on('2026-04-01'), status: 'draft' });
+  it('applies the version in force, not the one that replaced it later', () => {
+    const upTo2026 = costing({
+      id: 1,
+      effectiveFrom: on('2023-04-01'),
+      effectiveTo: on('2026-03-31'),
+    });
+    const revised = costing({ id: 2, effectiveFrom: on('2026-04-01') });
 
-    expect(resolveCosting([inForce, nextYear], 3, on('2026-06-25'))?.id).toBe(1);
+    expect(resolveCosting([upTo2026, revised], 3, on('2025-12-01'))?.id).toBe(1);
+    expect(resolveCosting([upTo2026, revised], 3, on('2026-04-01'))?.id).toBe(2);
   });
 
   it('picks the version in force on the day, not the newest one written', () => {
@@ -62,7 +66,6 @@ describe('resolveCosting', () => {
       id: 1,
       effectiveFrom: on('2023-04-01'),
       effectiveTo: on('2026-03-31'),
-      status: 'superseded',
     });
     const current = costing({ id: 2, effectiveFrom: on('2026-04-01') });
 

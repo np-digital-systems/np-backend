@@ -12,8 +12,12 @@
  *
  *   npm run db:seed:chart
  *
- * It is idempotent — matched on `code`, so running it twice changes nothing and
- * a head somebody has since renamed is left with the name they gave it.
+ * FOR AN EMPTY CHART OF ACCOUNTS ONLY. It matches on `code`, so it overwrites
+ * nothing — but a temple that already numbers its heads its own way would end
+ * up with these sitting beside those, two schemes for one set of books and no
+ * way to tell from a report which was meant. The guard below refuses that; run
+ * it against a database whose chart is already built and it will tell you so
+ * rather than quietly doubling it.
  */
 import { PrismaPg } from '@prisma/adapter-pg';
 
@@ -218,6 +222,30 @@ const HEADS: Head[] = [
 ];
 
 async function main(): Promise<void> {
+  /*
+   * A chart of accounts is numbered once and lived with. Where one exists,
+   * these codes are somebody else's opinion about the same thing, and adding
+   * them is not a merge — it is two charts in one table.
+   */
+  const charted = await prisma.account.count();
+
+  if (charted > 0) {
+    const mine = await prisma.account.count({
+      where: { code: { in: HEADS.map((head) => head.code) } },
+    });
+
+    console.error(
+      `This database already has ${charted} account(s), of which ${mine} share a code with this file.\n` +
+        'Refusing to run: a starter chart belongs in an empty book, and adding it\n' +
+        'beside an existing one leaves two numbering schemes for the same heads.\n' +
+        'Add whatever heads you are missing by hand, in the numbering you already use.',
+    );
+
+    process.exitCode = 1;
+
+    return;
+  }
+
   for (const fund of FUNDS) {
     await prisma.fund.upsert({
       where: { nameTa: fund.nameTa },
