@@ -36,7 +36,7 @@ const COSTING_INCLUDE = {
   },
 } satisfies Prisma.EventCostingInclude;
 
-type CostingRow = Prisma.EventCostingGetPayload<{ include: typeof COSTING_INCLUDE }>;
+export type CostingRow = Prisma.EventCostingGetPayload<{ include: typeof COSTING_INCLUDE }>;
 
 const isoDate = (value: Date): string => value.toISOString().slice(0, 10);
 
@@ -229,14 +229,16 @@ export class EventCostingsService {
   }
 
   /**
-   * Revise a costing, versioning it where it has already been quoted from.
+   * Save a costing, keeping what it used to say.
    *
-   * Nothing is put into force and nothing is switched over. A costing nobody
-   * has used yet is simply corrected. One that has priced an occurrence is
-   * closed the day before today and its successor opened today, so that the
-   * family quoted last year goes on being owed what they were told while every
-   * date from here reads the new figure. The temple asked for one act — save —
-   * and this is what has to happen underneath for that act to be honest.
+   * Every change made on a later day than the version was written opens a new
+   * version and closes the old one the day before. Nothing is put into force
+   * and nothing is switched over: the temple presses Save, and the record of
+   * what the rate was before that keeps itself.
+   *
+   * Corrections made on the same day merge into the version being written. A
+   * morning of typing is one act, not fifteen versions of one, and two versions
+   * could not both claim today in any case.
    */
   async update(
     id: number,
@@ -258,16 +260,14 @@ export class EventCostingsService {
     const lines = dto.lines ?? this.linesFrom(before);
     const quoted = chargedTotal(lines);
 
-    const used = await this.usage(id);
-    const startedToday = isoDate(before.effectiveFrom) >= isoDate(today());
-
     /*
-     * Same-day corrections stay in place even once something has been costed
-     * from them: the version has nowhere to be closed to that would not overlap
-     * its successor, and a costing still being set up this morning is being
-     * corrected rather than revised.
+     * Written on an earlier day, so what it says now is what the temple was
+     * working from until this moment. That is worth keeping whether or not a
+     * pooja was ever priced from it: the question at a year end is what the
+     * rate was, not which days happened to use it.
      */
-    const versions = used > 0 && !startedToday;
+    const startedToday = isoDate(before.effectiveFrom) >= isoDate(today());
+    const versions = !startedToday;
 
     const targetId = await this.prisma.$transaction(async (tx) => {
       if (!versions) {
@@ -311,8 +311,8 @@ export class EventCostingsService {
       entityRef: String(targetId),
       summary: versions
         ? `Revised ${this.scopeLabel(before)} to ${toRupees(quoted)} from ${isoDate(today())}; ` +
-          `costing ${id} kept as history for the ${used} occurrence(s) quoted from it`
-        : `Corrected the costing for ${this.scopeLabel(before)} to ${toRupees(quoted)}`,
+          `costing ${id} kept as the record of what it was before`
+        : `Corrected today's costing for ${this.scopeLabel(before)} to ${toRupees(quoted)}`,
     });
 
     return this.findOneOrFail(targetId);
