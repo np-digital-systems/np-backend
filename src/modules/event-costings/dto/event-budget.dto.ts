@@ -146,7 +146,7 @@ export class RaiseReceiptDto extends MovementDto {
 }
 
 export class PaymentLineDto {
-  @ApiProperty({ description: 'The budget line being settled' })
+  @ApiProperty({ description: 'The costing line being settled, by its id' })
   @Type(() => Number)
   @IsInt()
   @Min(1)
