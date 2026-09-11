@@ -15,7 +15,7 @@ import { toAccountRef } from '../accounts/accounts.service';
 import { describeInstance } from '../sponsors/instance-label';
 import { VouchersService } from '../vouchers/vouchers.service';
 import { VoucherRecordDto } from '../vouchers/dto/voucher.dto';
-import { EventCostingsService } from './event-costings.service';
+import { EventCostingsService, type CostingRow } from './event-costings.service';
 import {
   BudgetLineDto,
   BudgetLineStatus,
@@ -28,10 +28,6 @@ import {
 const EVENT_INCLUDE = {
   slot: { include: { eventType: true } },
   sponsor: { select: { id: true, nameTa: true, isActive: true } },
-  budgetLines: {
-    include: { account: true, party: { select: { nameTa: true } } },
-    orderBy: { lineNo: 'asc' },
-  },
 } satisfies Prisma.EventInclude;
 
 type EventRow = Prisma.EventGetPayload<{ include: typeof EVENT_INCLUDE }>;
@@ -56,74 +52,6 @@ export class EventBudgetsService {
   ) {}
 
   /**
-   * Freeze the costing onto the occurrence.
-   *
-   * Everything after this reads the frozen copy, never the costing, so a rate
-   * revised in 2029 cannot rewrite what a family was told in 2026. Only
-   * headings are copied: the itemisation belongs to the quote the sponsor was
-   * shown, not to the books.
-   */
-  async cost(eventId: number, context: ActorContext): Promise<EventBudgetDto> {
-    const event = await this.load(eventId);
-
-    if (event.isCompleted) {
-      throw new ConflictException(
-        'That occurrence is marked complete; reopen it before costing it again',
-      );
-    }
-
-    const costing = await this.costings.applicableTo(
-      event.slot.eventTypeId,
-      event.slotId,
-      event.scheduledDate,
-    );
-
-    if (!costing) {
-      const summary = await this.costings.resolve(event.slotId, event.scheduledDate);
-
-      throw new BadRequestException(summary.problem ?? 'No costing is in force for that day');
-    }
-
-    const headings = costing.lines.filter((line) => line.parentLineId === null);
-
-    await this.prisma.$transaction(async (tx) => {
-      await tx.eventBudgetLine.deleteMany({ where: { eventId } });
-
-      await tx.eventBudgetLine.createMany({
-        data: headings.map((heading, index) => ({
-          eventId,
-          lineNo: index + 1,
-          // The heading as it reads today. A head renamed next year leaves what
-          // the sponsor was shown exactly as it was shown.
-          label: heading.label ?? heading.account.nameTa,
-          accountId: heading.accountId,
-          fundId: heading.fundId,
-          activityId: heading.activityId,
-          partyId: heading.partyId,
-          amount: heading.amount,
-          chargedToSponsor: heading.chargedToSponsor,
-        })),
-      });
-
-      await tx.event.update({
-        where: { id: eventId },
-        data: { costingId: costing.id, sponsorAmount: costing.sponsorAmount },
-      });
-    });
-
-    await this.audit.record(context, {
-      action: 'update',
-      entity: 'event',
-      entityRef: String(eventId),
-      summary:
-        `Costed ${this.describe(event)} from costing ${costing.id}: ` +
-        `quoted ${toRupees(costing.sponsorAmount)} over ${headings.length} head(s)`,
-    });
-
-    return this.find(eventId);
-  }
-
-  /**
    * What this occurrence is expected to cost, for a voucher form to fill from.
    *
    * The frozen budget wins where there is one: a day already quoted is owed the
@@ -135,18 +63,6 @@ export class EventBudgetsService {
   async expected(eventId: number): Promise<ExpectedAmountsDto> {
     const event = await this.load(eventId);
 
-    if (event.budgetLines.length > 0) {
-      return {
-        costed: true,
-        sponsorAmount: event.sponsorAmount === null ? null : toRupees(event.sponsorAmount),
-        lines: event.budgetLines.map((line) => ({
-          accountId: line.accountId,
-          label: line.label,
-          amount: toRupees(line.amount),
-        })),
-      };
-    }
-
     const costing = await this.costings.applicableTo(
       event.slot.eventTypeId,
       event.slotId,
@@ -156,7 +72,9 @@ export class EventBudgetsService {
     if (!costing) return { costed: false, sponsorAmount: null, lines: [] };
 
     return {
-      costed: false,
+      // Resolved, never frozen: the version in force on the day's own date is
+      // the one that priced it, and the date ranges keep that true for ever.
+      costed: true,
       sponsorAmount: toRupees(costing.sponsorAmount),
       lines: costing.lines
         .filter((line) => line.parentLineId === null)
@@ -168,11 +86,25 @@ export class EventBudgetsService {
     };
   }
 
-  /** The frozen budget, measured against what the ledger actually says. */
+  /**
+   * What the day is expected to cost, measured against what it actually cost.
+   *
+   * The expectation is resolved from the version in force on the day's own
+   * date, not copied onto the day beforehand. The date ranges already make that
+   * answer permanent: a pooja held in 2026 resolves to the 2026 version however
+   * many times the rate is revised afterwards, so there is nothing a frozen
+   * copy would have protected that this does not.
+   */
   async find(eventId: number): Promise<EventBudgetDto> {
     const event = await this.load(eventId);
 
-    if (event.budgetLines.length === 0) {
+    const costing = await this.costings.applicableTo(
+      event.slot.eventTypeId,
+      event.slotId,
+      event.scheduledDate,
+    );
+
+    if (!costing) {
       const summary = await this.costings.resolve(event.slotId, event.scheduledDate);
 
       return {
@@ -185,11 +117,11 @@ export class EventBudgetsService {
         actualTotal: 0,
         variance: 0,
         isFrozen: event.isCompleted,
-        problem:
-          summary.problem ??
-          'This occurrence has not been costed yet. Costing it freezes the figures onto the day.',
+        problem: summary.problem,
       };
     }
+
+    const headings = costing.lines.filter((line) => line.parentLineId === null);
 
     const [actuals, raised, received] = await Promise.all([
       this.actualsByAccount(eventId),
@@ -197,15 +129,17 @@ export class EventBudgetsService {
       this.sponsorReceived(eventId),
     ]);
 
-    const lines = event.budgetLines.map((line) => this.toLine(line, actuals, raised));
+    const lines = headings.map((heading, index) =>
+      this.toLine(heading, index + 1, actuals, raised),
+    );
 
     const budgetedTotal = lines.reduce((total, line) => total + line.budgeted, 0);
     const actualTotal = lines.reduce((total, line) => total + line.actual, 0);
 
     return {
       eventId,
-      costingId: event.costingId,
-      sponsorAmount: event.sponsorAmount === null ? null : toRupees(event.sponsorAmount),
+      costingId: costing.id,
+      sponsorAmount: toRupees(costing.sponsorAmount),
       sponsorReceived: received,
       lines,
       budgetedTotal,
@@ -229,10 +163,6 @@ export class EventBudgetsService {
     context: ActorContext,
   ): Promise<VoucherRecordDto> {
     const event = await this.load(eventId);
-
-    if (event.sponsorAmount === null || event.costingId === null) {
-      throw new BadRequestException('Cost this occurrence before receipting it');
-    }
 
     if (!event.sponsor) {
       throw new BadRequestException(
@@ -261,6 +191,18 @@ export class EventBudgetsService {
      */
     const coding = await this.costings.codingFor(event.slot.eventTypeId);
 
+    const costing = await this.costings.applicableTo(
+      event.slot.eventTypeId,
+      event.slotId,
+      event.scheduledDate,
+    );
+
+    if (!costing) {
+      const summary = await this.costings.resolve(event.slotId, event.scheduledDate);
+
+      throw new BadRequestException(summary.problem ?? 'No costing covers that day');
+    }
+
     const voucher = await this.vouchers.create(
       {
         kind: VoucherKind.receipt,
@@ -275,7 +217,7 @@ export class EventBudgetsService {
         lines: [
           {
             accountId: coding.accountId,
-            amount: dto.amount ?? toRupees(event.sponsorAmount),
+            amount: dto.amount ?? toRupees(costing.sponsorAmount),
             fundId: coding.fundId,
             activityId: coding.activityId,
             eventId,
@@ -308,7 +250,20 @@ export class EventBudgetsService {
     context: ActorContext,
   ): Promise<VoucherRecordDto> {
     const event = await this.load(eventId);
-    const chosen = this.chosenLines(event, dto);
+
+    const costing = await this.costings.applicableTo(
+      event.slot.eventTypeId,
+      event.slotId,
+      event.scheduledDate,
+    );
+
+    if (!costing) {
+      const summary = await this.costings.resolve(event.slotId, event.scheduledDate);
+
+      throw new BadRequestException(summary.problem ?? 'No costing covers that day');
+    }
+
+    const chosen = this.chosenLines(costing, dto);
 
     const payee = await this.resolvePayee(chosen, dto);
 
@@ -316,7 +271,9 @@ export class EventBudgetsService {
       {
         kind: VoucherKind.payment,
         date: dto.date ?? isoDate(new Date()),
-        description: `${this.describe(event)} — ${chosen.map((line) => line.label).join(', ')}`,
+        description: `${this.describe(event)} — ${chosen
+          .map((line) => line.label ?? line.account.nameTa)
+          .join(', ')}`,
         mode: dto.mode,
         bankAccountId: dto.bankAccountId ?? undefined,
         chequeNo: dto.chequeNo ?? undefined,
@@ -326,7 +283,7 @@ export class EventBudgetsService {
         lines: chosen.map((line) => ({
           accountId: line.accountId,
           amount:
-            dto.lines.find((chosenLine) => BigInt(chosenLine.budgetLineId) === line.id)?.amount ??
+            dto.lines.find((chosenLine) => chosenLine.budgetLineId === line.id)?.amount ??
             toRupees(line.amount),
           fundId: line.fundId,
           activityId: line.activityId ?? undefined,
@@ -348,12 +305,15 @@ export class EventBudgetsService {
 
   // ── rules ─────────────────────────────────────────────────────────────────
 
-  private chosenLines(event: EventRow, dto: RaisePaymentDto): EventRow['budgetLines'] {
-    const wanted = new Set(dto.lines.map((line) => BigInt(line.budgetLineId)));
-    const chosen = event.budgetLines.filter((line) => wanted.has(line.id));
+  private chosenLines(costing: CostingRow, dto: RaisePaymentDto): CostingRow['lines'] {
+    const wanted = new Set(dto.lines.map((line) => line.budgetLineId));
+
+    const chosen = costing.lines.filter(
+      (line) => line.parentLineId === null && wanted.has(line.id),
+    );
 
     if (chosen.length !== wanted.size) {
-      throw new NotFoundException('Some of those budget lines do not belong to this occurrence');
+      throw new NotFoundException('Some of those lines are not on the costing for that day');
     }
 
     return chosen;
@@ -367,7 +327,7 @@ export class EventBudgetsService {
    * the answer is two vouchers, and saying so is more use than guessing.
    */
   private async resolvePayee(
-    lines: EventRow['budgetLines'],
+    lines: CostingRow['lines'],
     dto: RaisePaymentDto,
   ): Promise<{ partyId: number | null; name: string }> {
     const named = [...new Set(lines.flatMap((line) => (line.partyId ? [line.partyId] : [])))];
@@ -464,7 +424,8 @@ export class EventBudgetsService {
   }
 
   private toLine(
-    line: EventRow['budgetLines'][number],
+    line: CostingRow['lines'][number],
+    lineNo: number,
     actuals: Map<number, number>,
     raised: Map<number, BudgetLineStatus>,
   ): BudgetLineDto {
@@ -473,8 +434,8 @@ export class EventBudgetsService {
 
     return {
       id: String(line.id),
-      lineNo: line.lineNo,
-      label: line.label,
+      lineNo,
+      label: line.label ?? line.account.nameTa,
       accountId: line.accountId,
       account: toAccountRef(line.account),
       fundId: line.fundId,
