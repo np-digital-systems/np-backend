@@ -35,16 +35,6 @@ export class EventBudgetsController {
     return this.budgets.expected(eventId);
   }
 
-  @Post('budget')
-  @RequirePermissions('event-costing:manage')
-  @ApiOperation({ summary: 'Freeze the costing in force onto this occurrence' })
-  cost(
-    @Param('eventId', ParseIntPipe) eventId: number,
-    @Actor() context: ActorContext,
-  ): Promise<EventBudgetDto> {
-    return this.budgets.cost(eventId, context);
-  }
-
   @Post('vouchers/receipt')
   @RequirePermissions('receipt-voucher:create')
   @ApiOperation({ summary: 'A draft receipt for the sponsor, filled in from the frozen quote' })
