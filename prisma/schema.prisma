@@ -72,6 +72,14 @@ enum VoucherKind {
   @@map("voucher_kind")
 }
 
+enum CostingStatus {
+  draft
+  inForce    @map("in-force")
+  superseded
+
+  @@map("costing_status")
+}
+
 enum VoucherStatus {
   Draft
   PendingApproval @map("Pending Approval")
@@ -831,24 +839,31 @@ model Event {
 /// by closing this version and opening the next, which is why the same slot's
 /// history reads as a series rather than a single figure.
 model EventCosting {
-  id            Int       @id @default(autoincrement())
-  eventTypeId   Int       @map("event_type_id")
+  id            Int           @id @default(autoincrement())
+  eventTypeId   Int           @map("event_type_id")
   /// Null covers every slot of the type. A row naming a slot wins over one
   /// that does not — the resolution rule the whole model turns on.
-  slotId        Int?      @map("slot_id")
-  effectiveFrom DateTime  @map("effective_from") @db.Date
+  slotId        Int?          @map("slot_id")
+  /// Null means it has always applied — the first version a scope ever had,
+  /// which has no predecessor to start after and so prices every day before it
+  /// as well as every day since.
+  effectiveFrom DateTime?     @map("effective_from") @db.Date
   /// Null means still in force. Closed by the version that succeeds it.
-  effectiveTo   DateTime? @map("effective_to") @db.Date
+  effectiveTo   DateTime?     @map("effective_to") @db.Date
+  /// Draft until the committee applies it. A draft is exempt from the one-per-
+  /// scope exclusion, so next year's revision can be written and argued over
+  /// while the version being quoted from stays in force.
+  status        CostingStatus @default(draft)
   /// What the sponsor is asked for: the lines charged to them, added up. Stored
   /// rather than summed on read so the figure a family was quoted survives a
   /// line being corrected afterwards.
-  sponsorAmount Decimal   @map("sponsor_amount") @db.Decimal(12, 2)
+  sponsorAmount Decimal       @map("sponsor_amount") @db.Decimal(12, 2)
   notes         String?
-  createdBy     String    @map("created_by") @db.Uuid
-  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  createdBy     String        @map("created_by") @db.Uuid
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
   /// When the figures last changed. The committee revises them about every
   /// three years, and this is what a year-by-year report reads them by.
-  updatedAt     DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  updatedAt     DateTime      @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   eventType     EventType          @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
   slot          EventSlot?         @relation(fields: [slotId], references: [id], onDelete: Cascade)
@@ -859,6 +874,7 @@ model EventCosting {
   // `one_costing_per_scope_at_a_time`, an exclusion constraint over the date
   // range, lives in the integrity migration; Prisma cannot express it.
   @@index([eventTypeId, slotId], map: "costings_scope")
+  @@index([status], map: "costings_status")
   @@index([createdBy], map: "costings_created_by")
   @@map("event_costings")
 }
