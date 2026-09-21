@@ -134,17 +134,6 @@ export class MovementDto {
   manualVoucherNo!: string;
 }
 
-export class RaiseReceiptDto extends MovementDto {
-  @ApiPropertyOptional({
-    description: 'Overrides the quote, for the family who rounded up on the day',
-  })
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @IsPositive()
-  amount?: number;
-}
-
 export class PaymentLineDto {
   @ApiProperty({ description: 'The costing line being settled, by its id' })
   @Type(() => Number)

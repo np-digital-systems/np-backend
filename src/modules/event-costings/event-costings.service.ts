@@ -8,7 +8,7 @@ import {
 import { money, toRupees } from '../../common/money/money';
 import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
-import { AccountType } from '../../generated/prisma/enums';
+import { AccountType, CostingStatus } from '../../generated/prisma/enums';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { toAccountRef } from '../accounts/accounts.service';
@@ -74,6 +74,12 @@ const lineAmount = (line: WriteCostingLineDto): Prisma.Decimal =>
         .toDecimalPlaces(2)
     : money(line.amount ?? 0);
 
+/** What resolution needs of a row's status: whether the committee applied it. */
+const withStanding = <T extends { status: CostingStatus }>(row: T): T & { isApplied: boolean } => ({
+  ...row,
+  isApplied: row.status !== CostingStatus.draft,
+});
+
 /**
  * What the sponsor is asked for: the lines charged to them, added up.
  *
@@ -94,17 +100,34 @@ export class EventCostingsService {
   ) {}
 
   async findMany(query: QueryCostingsDto): Promise<CostingRecordDto[]> {
+    /*
+     * Built as a list rather than spread into one object, because both filters
+     * now speak about the status and the second spread would have silently won.
+     * Asking for what was in force on a date would then have returned drafts.
+     */
+    const conditions: Prisma.EventCostingWhereInput[] = [];
+
+    // By status, not an open end date: a draft has one of those too, and asking
+    // for what is in force must not return what has yet to be.
+    if (query.inForce) conditions.push({ status: CostingStatus.inForce });
+
+    if (query.on) {
+      const on = asDate(query.on);
+
+      conditions.push(
+        { status: { not: CostingStatus.draft } },
+        // A null start has always applied, so it covers the date by having no
+        // beginning to fall short of.
+        { OR: [{ effectiveFrom: null }, { effectiveFrom: { lte: on } }] },
+        { OR: [{ effectiveTo: null }, { effectiveTo: { gte: on } }] },
+      );
+    }
+
     const costings = await this.prisma.eventCosting.findMany({
       where: {
         eventTypeId: query.eventTypeId,
         slotId: query.slotId,
-        ...(query.inForce ? { effectiveTo: null } : {}),
-        ...(query.on
-          ? {
-              effectiveFrom: { lte: asDate(query.on) },
-              OR: [{ effectiveTo: null }, { effectiveTo: { gte: asDate(query.on) } }],
-            }
-          : {}),
+        ...(conditions.length > 0 ? { AND: conditions } : {}),
       },
       include: COSTING_INCLUDE,
       orderBy: [{ eventTypeId: 'asc' }, { slotId: 'asc' }, { effectiveFrom: 'desc' }],
@@ -182,7 +205,13 @@ export class EventCostingsService {
       include: COSTING_INCLUDE,
     });
 
-    return resolveCosting(candidates, slotId, on);
+    /*
+     * Drafts are fetched and then rejected by the rule rather than filtered out
+     * of the query. The one piece that decides money should be able to say why
+     * it passed a version over, and a row the query never returned is a row no
+     * test of that rule can be written against.
+     */
+    return resolveCosting(candidates.map(withStanding), slotId, on);
   }
 
   async create(dto: CreateCostingDto, context: ActorContext): Promise<CostingRecordDto> {
@@ -194,17 +223,26 @@ export class EventCostingsService {
     await this.assertLineCoding(lines);
 
     /*
-     * A saved costing is in force from the day it is saved. There is no draft
-     * and nothing to switch on: what is written applies, until the day it is
-     * revised. Anything already dated before that keeps the figures it was
-     * quoted at, because those live on the occurrence, not here.
+     * A saved costing is a draft and prices nothing yet. Writing one changes no
+     * quote and closes no version: it waits until the committee applies it,
+     * which is the act that says a figure really did change rather than that
+     * somebody was correcting yesterday's typing.
+     *
+     * The start date is left unset and settled when it is applied. Whether this
+     * is the first version of its scope — the case that must have no start, so
+     * that a festival kept in August and costed in September is priced by
+     * something — is a question about the day it goes into force, not the day
+     * it was typed, and a draft may sit unapplied across the arrival of another.
      */
+    const effectiveFrom = dto.effectiveFrom ? asDate(dto.effectiveFrom) : null;
+
     const costing = await this.prisma.$transaction(async (tx) => {
       const created = await tx.eventCosting.create({
         data: {
           eventTypeId: dto.eventTypeId,
           slotId: dto.slotId ?? null,
-          effectiveFrom: dto.effectiveFrom ? asDate(dto.effectiveFrom) : today(),
+          effectiveFrom,
+          status: CostingStatus.draft,
           sponsorAmount: chargedTotal(lines),
           notes: dto.notes ?? null,
           createdBy: context.actor.id,
@@ -220,25 +258,31 @@ export class EventCostingsService {
       action: 'create',
       entity: 'event_costing',
       entityRef: String(costing.id),
+      // "Drafted", not "Costed": nothing is quoted at this figure until it is
+      // applied, and an audit line that says otherwise is the one a year-end
+      // reader would take for the moment the rate changed.
       summary:
-        `Costed ${await this.scopeName(dto.eventTypeId, dto.slotId ?? null)} at ` +
-        `${toRupees(costing.sponsorAmount)} from ${isoDate(costing.effectiveFrom)}`,
+        `Drafted a costing for ${await this.scopeName(dto.eventTypeId, dto.slotId ?? null)} ` +
+        `at ${toRupees(costing.sponsorAmount)}`,
     });
 
     return this.findOneOrFail(costing.id);
   }
 
   /**
-   * Save a costing, keeping what it used to say.
+   * Save a costing. Nothing it says reaches a quote until it is applied.
    *
-   * Every change made on a later day than the version was written opens a new
-   * version and closes the old one the day before. Nothing is put into force
-   * and nothing is switched over: the temple presses Save, and the record of
-   * what the rate was before that keeps itself.
+   * Editing a draft rewrites it in place: it prices nothing, so there is
+   * nothing to keep a record of and no version to open. Editing the version in
+   * force does not touch it — the figures go to that scope's draft, which is
+   * created on the first such save and rewritten by every one after it. The
+   * temple goes on quoting the applied version the whole time.
    *
-   * Corrections made on the same day merge into the version being written. A
-   * morning of typing is one act, not fifteen versions of one, and two versions
-   * could not both claim today in any case.
+   * This is what a draft is for. A rate the committee revises about every three
+   * years is worth a version; a typo noticed the next morning is not, and
+   * before there was an act of applying one, the two were indistinguishable —
+   * every edit made on a later day opened a version, so the record showed a
+   * rate change the temple had never made.
    */
   async update(
     id: number,
@@ -247,7 +291,7 @@ export class EventCostingsService {
   ): Promise<CostingRecordDto> {
     const before = await this.load(id);
 
-    if (before.effectiveTo !== null) {
+    if (before.status === CostingStatus.superseded) {
       throw new ConflictException(
         'That version was replaced by a later one and is kept as history. ' +
           'Edit the version in force, or copy this one to start again from it',
@@ -259,18 +303,10 @@ export class EventCostingsService {
     const coding = await this.codingFor(before.eventTypeId);
     const lines = dto.lines ?? this.linesFrom(before);
     const quoted = chargedTotal(lines);
+    const notes = dto.notes === undefined ? before.notes : (dto.notes ?? null);
 
-    /*
-     * Written on an earlier day, so what it says now is what the temple was
-     * working from until this moment. That is worth keeping whether or not a
-     * pooja was ever priced from it: the question at a year end is what the
-     * rate was, not which days happened to use it.
-     */
-    const startedToday = isoDate(before.effectiveFrom) >= isoDate(today());
-    const versions = !startedToday;
-
-    const targetId = await this.prisma.$transaction(async (tx) => {
-      if (!versions) {
+    if (before.status === CostingStatus.draft) {
+      await this.prisma.$transaction(async (tx) => {
         await tx.eventCosting.update({
           where: { id },
           data: { notes: dto.notes, sponsorAmount: quoted },
@@ -280,42 +316,189 @@ export class EventCostingsService {
           await tx.eventCostingLine.deleteMany({ where: { costingId: id } });
           await this.writeLines(tx, id, dto.lines, coding);
         }
-
-        return id;
-      }
-
-      await tx.eventCosting.update({
-        where: { id },
-        data: { effectiveTo: dayBefore(today()) },
       });
 
-      const successor = await tx.eventCosting.create({
+      await this.audit.record(context, {
+        action: 'update',
+        entity: 'event_costing',
+        entityRef: String(id),
+        summary: `Revised the draft costing for ${this.scopeLabel(before)} to ${toRupees(quoted)}`,
+      });
+
+      return this.findOneOrFail(id);
+    }
+
+    /*
+     * One draft per scope, rewritten rather than added to.
+     *
+     * Two drafts would put the committee in front of a choice nobody asked for
+     * — which of these do you mean? — and the exclusion constraint cannot stop
+     * it, because drafts are exactly what it exempts.
+     */
+    const existing = await this.prisma.eventCosting.findFirst({
+      where: {
+        eventTypeId: before.eventTypeId,
+        slotId: before.slotId,
+        status: CostingStatus.draft,
+      },
+    });
+
+    const draftId = await this.prisma.$transaction(async (tx) => {
+      if (existing) {
+        await tx.eventCosting.update({
+          where: { id: existing.id },
+          data: { sponsorAmount: quoted, notes },
+        });
+
+        await tx.eventCostingLine.deleteMany({ where: { costingId: existing.id } });
+        await this.writeLines(tx, existing.id, lines, coding);
+
+        return existing.id;
+      }
+
+      const draft = await tx.eventCosting.create({
         data: {
           eventTypeId: before.eventTypeId,
           slotId: before.slotId,
-          effectiveFrom: today(),
+          // Settled when it is applied, not now: see `create`.
+          effectiveFrom: null,
+          status: CostingStatus.draft,
           sponsorAmount: quoted,
-          notes: dto.notes === undefined ? before.notes : (dto.notes ?? null),
+          notes,
           createdBy: context.actor.id,
         },
       });
 
-      await this.writeLines(tx, successor.id, lines, coding);
+      await this.writeLines(tx, draft.id, lines, coding);
 
-      return successor.id;
+      return draft.id;
     });
 
     await this.audit.record(context, {
       action: 'update',
       entity: 'event_costing',
-      entityRef: String(targetId),
-      summary: versions
-        ? `Revised ${this.scopeLabel(before)} to ${toRupees(quoted)} from ${isoDate(today())}; ` +
-          `costing ${id} kept as the record of what it was before`
-        : `Corrected today's costing for ${this.scopeLabel(before)} to ${toRupees(quoted)}`,
+      entityRef: String(draftId),
+      summary:
+        `Drafted ${toRupees(quoted)} for ${this.scopeLabel(before)}; ` +
+        `costing ${id} stays in force until it is applied`,
     });
 
-    return this.findOneOrFail(targetId);
+    return this.findOneOrFail(draftId);
+  }
+
+  /**
+   * Put a draft into force, and close the version it replaces.
+   *
+   * This is the act the whole model turns on. Until it happens the temple
+   * quotes what it quoted yesterday; after it, the old figures are history and
+   * the year-by-year report reads them as what the rate was until today.
+   */
+  async apply(id: number, context: ActorContext): Promise<CostingRecordDto> {
+    const draft = await this.load(id);
+
+    if (draft.status !== CostingStatus.draft) {
+      throw new ConflictException(
+        draft.status === CostingStatus.inForce
+          ? 'That costing is already in force'
+          : 'That version was replaced by a later one and cannot be applied again',
+      );
+    }
+
+    if (draft.lines.length === 0) {
+      throw new BadRequestException(
+        'That draft has no expense lines. A costing that prices nothing cannot be applied',
+      );
+    }
+
+    await this.assertLineCoding(this.linesFrom(draft));
+
+    const predecessor = await this.prisma.eventCosting.findFirst({
+      where: {
+        eventTypeId: draft.eventTypeId,
+        slotId: draft.slotId,
+        status: CostingStatus.inForce,
+      },
+    });
+
+    /*
+     * Nothing in force yet, so this one has always applied.
+     *
+     * It begins nowhere rather than today, which is what lets it price a day
+     * already past — a festival kept in August and costed in September. Only a
+     * start the committee named itself is kept.
+     */
+    if (!predecessor) {
+      await this.prisma.eventCosting.update({
+        where: { id },
+        data: { status: CostingStatus.inForce },
+      });
+
+      await this.audit.record(context, {
+        action: 'update',
+        entity: 'event_costing',
+        entityRef: String(id),
+        summary:
+          `Applied the costing for ${this.scopeLabel(draft)} at ` +
+          `${toRupees(draft.sponsorAmount)}` +
+          (draft.effectiveFrom ? ` from ${isoDate(draft.effectiveFrom)}` : ', applying throughout'),
+      });
+
+      return this.findOneOrFail(id);
+    }
+
+    /*
+     * The version in force began today, so it never priced a day this one will
+     * not. Closing it the day before would date it backwards; it is merged into
+     * instead, and the draft goes. A morning of revising is one act, exactly as
+     * a morning of typing was.
+     */
+    const sameDay =
+      predecessor.effectiveFrom !== null && isoDate(predecessor.effectiveFrom) >= isoDate(today());
+
+    const appliedId = await this.prisma.$transaction(async (tx) => {
+      if (sameDay) {
+        await tx.eventCosting.update({
+          where: { id: predecessor.id },
+          data: { sponsorAmount: draft.sponsorAmount, notes: draft.notes },
+        });
+
+        await tx.eventCostingLine.deleteMany({ where: { costingId: predecessor.id } });
+        await this.writeLines(
+          tx,
+          predecessor.id,
+          this.linesFrom(draft),
+          await this.codingFor(draft.eventTypeId),
+        );
+
+        await tx.eventCosting.delete({ where: { id } });
+
+        return predecessor.id;
+      }
+
+      await tx.eventCosting.update({
+        where: { id: predecessor.id },
+        data: { effectiveTo: dayBefore(today()), status: CostingStatus.superseded },
+      });
+
+      await tx.eventCosting.update({
+        where: { id },
+        data: { effectiveFrom: draft.effectiveFrom ?? today(), status: CostingStatus.inForce },
+      });
+
+      return id;
+    });
+
+    await this.audit.record(context, {
+      action: 'update',
+      entity: 'event_costing',
+      entityRef: String(appliedId),
+      summary: sameDay
+        ? `Applied ${toRupees(draft.sponsorAmount)} to today's costing for ${this.scopeLabel(draft)}`
+        : `Applied ${toRupees(draft.sponsorAmount)} for ${this.scopeLabel(draft)} from ` +
+          `${isoDate(today())}; costing ${predecessor.id} kept as what it was before`,
+    });
+
+    return this.findOneOrFail(appliedId);
   }
 
   /**
@@ -334,7 +517,7 @@ export class EventCostingsService {
       {
         eventTypeId: source.eventTypeId,
         slotId,
-        effectiveFrom: dto.effectiveFrom ?? isoDate(today()),
+        effectiveFrom: dto.effectiveFrom,
         notes: source.notes,
         lines: this.linesFrom(source),
       },
@@ -351,30 +534,50 @@ export class EventCostingsService {
     return created;
   }
 
+  /**
+   * Delete a costing that never priced anything.
+   *
+   * Two rows qualify and no others. A draft was never applied, so nothing was
+   * ever quoted from it — throwing away a revision the committee decided
+   * against is the ordinary end of one. A costing with no expense lines priced
+   * nothing even if it was applied: it is the empty row left behind when a
+   * scope was created and never filled in.
+   *
+   * Everything else stays. Once a costing has been applied with figures on it,
+   * it is the answer to what this pooja cost while it was in force, and that
+   * question does not stop being asked because the rate has since changed. The
+   * way to change it is to edit it and apply a new version, which keeps this
+   * one as the record of what came before.
+   */
   async remove(id: number, context: ActorContext): Promise<void> {
     const costing = await this.load(id);
-    const used = await this.usage(id);
+    const isDraft = costing.status === CostingStatus.draft;
 
-    if (used > 0) {
+    if (!isDraft && costing.lines.length > 0) {
       throw new ConflictException(
-        `${used} occurrence(s) were costed from this version; it is history and cannot be removed`,
+        costing.status === CostingStatus.superseded
+          ? 'That version was replaced by a later one. It is the answer to what this ' +
+              'pooja cost that year, and the year-by-year report is read from it'
+          : 'That costing is in force and is what this pooja is quoted at. Edit it and ' +
+              'apply a new version; the figures it has now are kept as what they were',
       );
     }
 
-    if (costing.effectiveTo !== null) {
-      throw new ConflictException(
-        'That version was replaced by a later one. It is the answer to what this ' +
-          'pooja cost that year, and the year-by-year report is read from it',
-      );
-    }
-
+    /*
+     * An occurrence pointing at this one loses the pointer and nothing else.
+     * `events.costing_id` is provenance — the column's own comment says it is
+     * never read back — and the day's budget is resolved from the version in
+     * force on its date, not from anything stored on the day.
+     */
     await this.prisma.eventCosting.delete({ where: { id } });
 
     await this.audit.record(context, {
       action: 'delete',
       entity: 'event_costing',
       entityRef: String(id),
-      summary: `Removed the unused costing for ${this.scopeLabel(costing)}`,
+      summary: isDraft
+        ? `Discarded the draft costing for ${this.scopeLabel(costing)}`
+        : `Removed the empty costing for ${this.scopeLabel(costing)}`,
     });
   }
 
@@ -627,10 +830,13 @@ export class EventCostingsService {
             costing.slot.customInstanceName,
           )
         : null,
-      effectiveFrom: isoDate(costing.effectiveFrom),
+      effectiveFrom: costing.effectiveFrom ? isoDate(costing.effectiveFrom) : null,
       effectiveTo: costing.effectiveTo ? isoDate(costing.effectiveTo) : null,
-      // Nothing switches a costing on: the one still open is the one in force.
-      isInForce: costing.effectiveTo === null,
+      status: costing.status,
+      isDraft: costing.status === CostingStatus.draft,
+      // Read from the status, not from an open end date: a draft has no end
+      // either, and before there were drafts that was a safe thing to confuse.
+      isInForce: costing.status === CostingStatus.inForce,
       sponsorAmount: toRupees(costing.sponsorAmount),
       incomeAccountId: coding?.accountId ?? null,
       incomeAccountName: activity?.defaultAccount

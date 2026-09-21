@@ -15,6 +15,7 @@ import {
   ValidateNested,
 } from 'class-validator';
 
+import { CostingStatus } from '../../../generated/prisma/enums';
 import { AccountRefDto } from '../../accounts/dto/account.dto';
 
 /** One item under a heading — what the quote shows a family. */
@@ -57,9 +58,21 @@ export class CostingRecordDto {
   slotId!: number | null;
   @ApiProperty({ nullable: true, description: 'Which instance, in the temple’s own words' })
   slotLabel!: string | null;
-  @ApiProperty({ example: '2026-04-01' }) effectiveFrom!: string;
+  @ApiProperty({
+    nullable: true,
+    example: '2026-04-01',
+    description: 'Null means it has always applied — the first version of this scope',
+  })
+  effectiveFrom!: string | null;
   @ApiProperty({ nullable: true, description: 'Null means still in force' })
   effectiveTo!: string | null;
+  @ApiProperty({
+    enum: CostingStatus,
+    description: 'A draft prices nothing until the committee applies it',
+  })
+  status!: CostingStatus;
+  @ApiProperty({ description: 'Whether it is still waiting to be applied' })
+  isDraft!: boolean;
   @ApiProperty({ description: 'Whether this is the version being quoted from today' })
   isInForce!: boolean;
   @ApiProperty({ description: 'The lines charged to the sponsor, added up' })
@@ -180,7 +193,8 @@ export class CreateCostingDto {
   slotId?: number | null;
 
   @ApiPropertyOptional({
-    description: 'Defaults to today. Occurrences from this date are quoted at this rate',
+    description:
+      'Left out, the first costing of a scope applies throughout and a later one from today',
     example: '2026-04-01',
   })
   @IsOptional()
@@ -249,7 +263,9 @@ export class CopyCostingDto {
   @Min(1)
   slotId?: number | null;
 
-  @ApiPropertyOptional({ description: 'Defaults to the period the original starts in' })
+  @ApiPropertyOptional({
+    description: 'Left out, a copy onto a fresh instance applies throughout',
+  })
   @IsOptional()
   @IsDateString()
   effectiveFrom?: string;
