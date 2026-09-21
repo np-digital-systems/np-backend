@@ -62,9 +62,25 @@ export class EventCostingsController {
 
   @Post()
   @RequirePermissions('event-costing:manage')
-  @ApiOperation({ summary: 'Save a costing. It applies from the day it is saved' })
+  @ApiOperation({ summary: 'Save a costing as a draft. It prices nothing until it is applied' })
   create(@Body() dto: CreateCostingDto, @Actor() context: ActorContext): Promise<CostingRecordDto> {
     return this.costings.create(dto, context);
+  }
+
+  /*
+   * The same permission as saving one. Splitting applying from managing would
+   * be defensible — writing next year's figures and deciding today is the day
+   * they start being quoted are different acts — but nobody has asked for that,
+   * and a permission no seeded role holds is an Apply button nobody can press.
+   */
+  @Post(':id/apply')
+  @RequirePermissions('event-costing:manage')
+  @ApiOperation({ summary: 'Put a draft into force, closing the version it replaces' })
+  apply(
+    @Param('id', ParseIntPipe) id: number,
+    @Actor() context: ActorContext,
+  ): Promise<CostingRecordDto> {
+    return this.costings.apply(id, context);
   }
 
   @Post(':id/copy')
@@ -81,7 +97,7 @@ export class EventCostingsController {
   @Patch(':id')
   @RequirePermissions('event-costing:manage')
   @ApiOperation({
-    summary: 'Save a costing. One already quoted from is kept and its successor opened from today',
+    summary: 'Save a costing. Editing the version in force writes to that scope’s draft instead',
   })
   update(
     @Param('id', ParseIntPipe) id: number,
