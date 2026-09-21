@@ -537,48 +537,47 @@ export class EventCostingsService {
   /**
    * Delete a costing that never priced anything.
    *
-   * A draft always qualifies: it was never in force, so nothing was quoted from
-   * it and there is no year-end question it answers. Throwing away a revision
-   * the committee decided against is the ordinary end of one.
+   * Two rows qualify and no others. A draft was never applied, so nothing was
+   * ever quoted from it — throwing away a revision the committee decided
+   * against is the ordinary end of one. A costing with no expense lines priced
+   * nothing even if it was applied: it is the empty row left behind when a
+   * scope was created and never filled in.
+   *
+   * Everything else stays. Once a costing has been applied with figures on it,
+   * it is the answer to what this pooja cost while it was in force, and that
+   * question does not stop being asked because the rate has since changed. The
+   * way to change it is to edit it and apply a new version, which keeps this
+   * one as the record of what came before.
    */
   async remove(id: number, context: ActorContext): Promise<void> {
     const costing = await this.load(id);
+    const isDraft = costing.status === CostingStatus.draft;
 
-    if (costing.status === CostingStatus.draft) {
-      await this.prisma.eventCosting.delete({ where: { id } });
-
-      await this.audit.record(context, {
-        action: 'delete',
-        entity: 'event_costing',
-        entityRef: String(id),
-        summary: `Discarded the draft costing for ${this.scopeLabel(costing)}`,
-      });
-
-      return;
-    }
-
-    const used = await this.usage(id);
-
-    if (used > 0) {
+    if (!isDraft && costing.lines.length > 0) {
       throw new ConflictException(
-        `${used} occurrence(s) were costed from this version; it is history and cannot be removed`,
+        costing.status === CostingStatus.superseded
+          ? 'That version was replaced by a later one. It is the answer to what this ' +
+              'pooja cost that year, and the year-by-year report is read from it'
+          : 'That costing is in force and is what this pooja is quoted at. Edit it and ' +
+              'apply a new version; the figures it has now are kept as what they were',
       );
     }
 
-    if (costing.status === CostingStatus.superseded) {
-      throw new ConflictException(
-        'That version was replaced by a later one. It is the answer to what this ' +
-          'pooja cost that year, and the year-by-year report is read from it',
-      );
-    }
-
+    /*
+     * An occurrence pointing at this one loses the pointer and nothing else.
+     * `events.costing_id` is provenance — the column's own comment says it is
+     * never read back — and the day's budget is resolved from the version in
+     * force on its date, not from anything stored on the day.
+     */
     await this.prisma.eventCosting.delete({ where: { id } });
 
     await this.audit.record(context, {
       action: 'delete',
       entity: 'event_costing',
       entityRef: String(id),
-      summary: `Removed the unused costing for ${this.scopeLabel(costing)}`,
+      summary: isDraft
+        ? `Discarded the draft costing for ${this.scopeLabel(costing)}`
+        : `Removed the empty costing for ${this.scopeLabel(costing)}`,
     });
   }
 
