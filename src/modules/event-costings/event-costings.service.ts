@@ -13,7 +13,7 @@ import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { toAccountRef } from '../accounts/accounts.service';
 import { describeInstance } from '../sponsors/instance-label';
-import { explainMissingCosting, resolveCosting } from './costing-resolution';
+import { explainMissingCosting, resolveCosting, templeDay } from './costing-resolution';
 import { explainMissingCoding, requireCoding, type PoojaCoding } from './costing-coding';
 import {
   CopyCostingDto,
@@ -38,12 +38,15 @@ const COSTING_INCLUDE = {
 
 export type CostingRow = Prisma.EventCostingGetPayload<{ include: typeof COSTING_INCLUDE }>;
 
-const isoDate = (value: Date): string => value.toISOString().slice(0, 10);
-
 /** A Postgres `date` compares against UTC midnight, so that is how one is made. */
-const asDate = (value: string): Date => new Date(`${value}T00:00:00.000Z`);
+/*
+ * A named date is the temple's own midnight, not UTC's. The columns hold
+ * instants now, so a start written as 2026-04-01 has to mean the moment that
+ * day began in Colombo — five and a half hours before UTC would have it.
+ */
+const utcMidnight = (value: string): Date => new Date(`${value}T00:00:00.000Z`);
 
-const dayBefore = (value: Date): Date => new Date(value.getTime() - 86_400_000);
+const asDate = (value: string): Date => templeDay(utcMidnight(value)).from;
 
 /** An activity's coding, or null where the temple has not set it yet. */
 function readCoding(
@@ -59,9 +62,6 @@ function readCoding(
     activityId: activity.id,
   };
 }
-
-/** Today as a Postgres `date` compares it: UTC midnight. */
-const today = (): Date => asDate(isoDate(new Date()));
 
 /** An item's amount follows from its quantity; a heading's is its own. */
 const lineAmount = (line: WriteCostingLineDto): Prisma.Decimal =>
@@ -112,14 +112,20 @@ export class EventCostingsService {
     if (query.inForce) conditions.push({ status: CostingStatus.inForce });
 
     if (query.on) {
-      const on = asDate(query.on);
+      /*
+       * Against the day's own bounds, not its midnight. The columns are
+       * instants: a version applied at half past ten that morning starts after
+       * UTC midnight of the same date, and comparing against the bare date
+       * would hide the very version the day was priced by.
+       */
+      const day = templeDay(utcMidnight(query.on));
 
       conditions.push(
         { status: { not: CostingStatus.draft } },
         // A null start has always applied, so it covers the date by having no
         // beginning to fall short of.
-        { OR: [{ effectiveFrom: null }, { effectiveFrom: { lte: on } }] },
-        { OR: [{ effectiveTo: null }, { effectiveTo: { gte: on } }] },
+        { OR: [{ effectiveFrom: null }, { effectiveFrom: { lt: day.to } }] },
+        { OR: [{ effectiveTo: null }, { effectiveTo: { gt: day.from } }] },
       );
     }
 
@@ -390,8 +396,12 @@ export class EventCostingsService {
    * Put a draft into force, and close the version it replaces.
    *
    * This is the act the whole model turns on. Until it happens the temple
-   * quotes what it quoted yesterday; after it, the old figures are history and
-   * the year-by-year report reads them as what the rate was until today.
+   * quotes what it quoted before; after it, the old figures are history and the
+   * year-by-year report reads them as what the rate was until this moment.
+   *
+   * Every apply becomes its own numbered version. Three in an afternoon are
+   * three decisions and are kept as three, which is why the periods are
+   * instants: a date could hold only one of them.
    */
   async apply(id: number, context: ActorContext): Promise<CostingRecordDto> {
     const draft = await this.load(id);
@@ -421,68 +431,51 @@ export class EventCostingsService {
     });
 
     /*
-     * Nothing in force yet, so this one has always applied.
-     *
-     * It begins nowhere rather than today, which is what lets it price a day
-     * already past — a festival kept in August and costed in September. Only a
-     * start the committee named itself is kept.
+     * The number this becomes, counted over what has actually been applied
+     * rather than from the predecessor's. A scope whose only version was
+     * deleted while empty would otherwise hand out a number twice.
      */
-    if (!predecessor) {
-      await this.prisma.eventCosting.update({
-        where: { id },
-        data: { status: CostingStatus.inForce },
-      });
+    const applied = await this.prisma.eventCosting.count({
+      where: {
+        eventTypeId: draft.eventTypeId,
+        slotId: draft.slotId,
+        status: { not: CostingStatus.draft },
+      },
+    });
 
-      await this.audit.record(context, {
-        action: 'update',
-        entity: 'event_costing',
-        entityRef: String(id),
-        summary:
-          `Applied the costing for ${this.scopeLabel(draft)} at ` +
-          `${toRupees(draft.sponsorAmount)}` +
-          (draft.effectiveFrom ? ` from ${isoDate(draft.effectiveFrom)}` : ', applying throughout'),
-      });
-
-      return this.findOneOrFail(id);
-    }
+    const versionNo = applied + 1;
 
     /*
-     * The version in force began today, so it never priced a day this one will
-     * not. Closing it the day before would date it backwards; it is merged into
-     * instead, and the draft goes. A morning of revising is one act, exactly as
-     * a morning of typing was.
+     * The instant it takes over, and the instant the one before it stops.
+     *
+     * The same value for both, so the two periods meet exactly: the half-open
+     * range means the predecessor's last moment is the one before this, and no
+     * day falls between them unpriced. Recording an instant rather than a date
+     * is what lets the committee revise three times in an afternoon and keep
+     * all three, which a date could not — two versions cannot share a day.
      */
-    const sameDay =
-      predecessor.effectiveFrom !== null && isoDate(predecessor.effectiveFrom) >= isoDate(today());
+    const at = new Date();
 
     const appliedId = await this.prisma.$transaction(async (tx) => {
-      if (sameDay) {
+      if (predecessor) {
         await tx.eventCosting.update({
           where: { id: predecessor.id },
-          data: { sponsorAmount: draft.sponsorAmount, notes: draft.notes },
+          data: { effectiveTo: at, status: CostingStatus.superseded },
         });
-
-        await tx.eventCostingLine.deleteMany({ where: { costingId: predecessor.id } });
-        await this.writeLines(
-          tx,
-          predecessor.id,
-          this.linesFrom(draft),
-          await this.codingFor(draft.eventTypeId),
-        );
-
-        await tx.eventCosting.delete({ where: { id } });
-
-        return predecessor.id;
       }
 
       await tx.eventCosting.update({
-        where: { id: predecessor.id },
-        data: { effectiveTo: dayBefore(today()), status: CostingStatus.superseded },
-      });
-
-      await tx.eventCosting.update({
         where: { id },
-        data: { effectiveFrom: draft.effectiveFrom ?? today(), status: CostingStatus.inForce },
+        data: {
+          /*
+           * Nothing in force before it, so it has always applied: it begins
+           * nowhere rather than now, which is what lets it price a day already
+           * past. Only a start the committee named itself is kept.
+           */
+          effectiveFrom: predecessor ? (draft.effectiveFrom ?? at) : draft.effectiveFrom,
+          status: CostingStatus.inForce,
+          versionNo,
+        },
       });
 
       return id;
@@ -492,10 +485,11 @@ export class EventCostingsService {
       action: 'update',
       entity: 'event_costing',
       entityRef: String(appliedId),
-      summary: sameDay
-        ? `Applied ${toRupees(draft.sponsorAmount)} to today's costing for ${this.scopeLabel(draft)}`
-        : `Applied ${toRupees(draft.sponsorAmount)} for ${this.scopeLabel(draft)} from ` +
-          `${isoDate(today())}; costing ${predecessor.id} kept as what it was before`,
+      summary: predecessor
+        ? `Applied version ${versionNo} of ${this.scopeLabel(draft)} at ` +
+          `${toRupees(draft.sponsorAmount)}; version ${predecessor.versionNo ?? '?'} closed`
+        : `Applied version ${versionNo} of ${this.scopeLabel(draft)} at ` +
+          `${toRupees(draft.sponsorAmount)}, applying throughout`,
     });
 
     return this.findOneOrFail(appliedId);
@@ -830,8 +824,11 @@ export class EventCostingsService {
             costing.slot.customInstanceName,
           )
         : null,
-      effectiveFrom: costing.effectiveFrom ? isoDate(costing.effectiveFrom) : null,
-      effectiveTo: costing.effectiveTo ? isoDate(costing.effectiveTo) : null,
+      // Full instants, not dates. Three versions can share an afternoon now, and
+      // the date alone would render them as three identical rows.
+      effectiveFrom: costing.effectiveFrom ? costing.effectiveFrom.toISOString() : null,
+      effectiveTo: costing.effectiveTo ? costing.effectiveTo.toISOString() : null,
+      versionNo: costing.versionNo,
       status: costing.status,
       isDraft: costing.status === CostingStatus.draft,
       // Read from the status, not from an open end date: a draft has no end
