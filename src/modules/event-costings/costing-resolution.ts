@@ -14,7 +14,7 @@ export interface CostingScope {
   slotId: number | null;
   /** Null means it has always applied: the first version the scope ever had. */
   effectiveFrom: Date | null;
-  /** Null means still in force; a date means a later version replaced it. */
+  /** Null means still in force; an instant is when its successor took over. */
   effectiveTo: Date | null;
   /*
    * False for a draft. A draft carries lines and a period like any other row,
@@ -27,19 +27,38 @@ export interface CostingScope {
   isApplied: boolean;
 }
 
+/**
+ * Sri Lanka keeps UTC+05:30 the year round and has observed no daylight saving
+ * since 2006, so the temple's day can be bounded by a constant rather than a
+ * timezone library. A scheduled date arrives as UTC midnight of that calendar
+ * day, and the day the temple actually kept runs from 18:30 UTC the evening
+ * before to 18:30 UTC that evening.
+ */
 const isoDate = (value: Date): string => value.toISOString().slice(0, 10);
 
+const TEMPLE_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The instants a calendar date begins and ends at, in the temple's own day. */
+export function templeDay(on: Date): { from: Date; to: Date } {
+  const from = on.getTime() - TEMPLE_OFFSET_MS;
+
+  return { from: new Date(from), to: new Date(from + DAY_MS) };
+}
+
 /**
- * A costing covers a date when the date falls inside its period, ends included.
+ * A costing covers a date when it was in force at any point during that day.
  *
- * An open start reaches backwards for ever, which is what lets a pooja costed
- * in September price the festival that was kept in August.
+ * The bounds are instants and half-open: a version ends at the moment its
+ * successor begins, so the two meet without overlapping and without leaving the
+ * day between them unpriced. An open start reaches backwards for ever, which is
+ * what lets a pooja costed in September price the festival kept in August.
  */
 export function covers(costing: CostingScope, on: Date): boolean {
-  const day = isoDate(on);
+  const day = templeDay(on);
 
-  if (costing.effectiveFrom && isoDate(costing.effectiveFrom) > day) return false;
-  if (costing.effectiveTo && isoDate(costing.effectiveTo) < day) return false;
+  if (costing.effectiveFrom && costing.effectiveFrom >= day.to) return false;
+  if (costing.effectiveTo && costing.effectiveTo <= day.from) return false;
 
   return true;
 }
@@ -51,6 +70,11 @@ export function covers(costing: CostingScope, on: Date): boolean {
  * one written for the festival at large, which is the whole reason a slot may
  * carry its own: without that order, an ordinary day's figures would quietly
  * price the biggest day of the year.
+ *
+ * Where several versions of one scope touched the same day — the committee
+ * revised twice in an afternoon — the last of them prices it. That is the
+ * figure they had settled on by the time the day was over, and the earlier ones
+ * are kept as the record of a decision rather than as a price anybody paid.
  *
  * A draft is not a candidate. It is written, it is saved, and it prices
  * nothing: until the committee applies it, what the temple quotes from is the
@@ -81,11 +105,12 @@ function mostRecent<T extends CostingScope>(candidates: readonly T[]): T | null 
 
   // An open start is the earliest thing there is, so it loses to any dated
   // version that also covers the day — the later decision is the live one.
-  const startedOn = (costing: T) => (costing.effectiveFrom ? isoDate(costing.effectiveFrom) : '');
+  const startedAt = (costing: T) =>
+    costing.effectiveFrom ? costing.effectiveFrom.getTime() : Number.NEGATIVE_INFINITY;
 
   return candidates.reduce((latest, costing) => {
-    if (startedOn(costing) > startedOn(latest)) return costing;
-    if (startedOn(costing) < startedOn(latest)) return latest;
+    if (startedAt(costing) > startedAt(latest)) return costing;
+    if (startedAt(costing) < startedAt(latest)) return latest;
 
     return costing.id > latest.id ? costing : latest;
   });

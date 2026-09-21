@@ -60,12 +60,20 @@ export class CostingRecordDto {
   slotLabel!: string | null;
   @ApiProperty({
     nullable: true,
-    example: '2026-04-01',
-    description: 'Null means it has always applied — the first version of this scope',
+    example: '2026-04-01T04:30:00.000Z',
+    description: 'The instant it took over. Null means it has always applied',
   })
   effectiveFrom!: string | null;
-  @ApiProperty({ nullable: true, description: 'Null means still in force' })
+  @ApiProperty({
+    nullable: true,
+    description: 'The instant its successor took over. Null means still in force',
+  })
   effectiveTo!: string | null;
+  @ApiProperty({
+    nullable: true,
+    description: '1, 2, 3 within the scope. Null while it is still a draft',
+  })
+  versionNo!: number | null;
   @ApiProperty({
     enum: CostingStatus,
     description: 'A draft prices nothing until the committee applies it',
