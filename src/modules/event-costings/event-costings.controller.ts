@@ -21,12 +21,9 @@ import {
   CostingRecordDto,
   CostingSummaryDto,
   CreateCostingDto,
-  HeadUsageDto,
   QueryCostingsDto,
-  QueryHeadUsageDto,
   ResolveCostingDto,
   UpdateCostingDto,
-  UpdateHeadDto,
 } from './dto/event-costing.dto';
 import { EventCostingsService } from './event-costings.service';
 
@@ -48,20 +45,6 @@ export class EventCostingsController {
   @ApiOperation({ summary: 'What an instance would be quoted on a date, without costing anything' })
   resolve(@Query() query: ResolveCostingDto): Promise<CostingSummaryDto> {
     return this.costings.resolve(query.slotId, new Date(`${query.on}T00:00:00.000Z`));
-  }
-
-  @Get('heads')
-  @RequirePermissions('event-costing:view')
-  @ApiOperation({ summary: 'Every costing in force that spends on one head' })
-  headUsage(@Query() query: QueryHeadUsageDto): Promise<HeadUsageDto[]> {
-    return this.costings.headUsage(query.accountId, query.eventTypeId);
-  }
-
-  @Patch('heads')
-  @RequirePermissions('event-costing:manage')
-  @ApiOperation({ summary: 'Reprice one head across many costings at once' })
-  updateHead(@Body() dto: UpdateHeadDto, @Actor() context: ActorContext): Promise<HeadUsageDto[]> {
-    return this.costings.updateHead(dto, context);
   }
 
   @Get(':id')
