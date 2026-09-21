@@ -17,6 +17,8 @@ import { explainMissingCosting, resolveCosting } from './costing-resolution';
 import { explainMissingCoding, requireCoding, type PoojaCoding } from './costing-coding';
 import {
   CopyCostingDto,
+  HeadUsageDto,
+  UpdateHeadDto,
   CostingItemDto,
   CostingLineDto,
   CostingRecordDto,
@@ -134,6 +136,96 @@ export class EventCostingsService {
     const used = await this.usageByCosting(versions.map((version) => version.id));
 
     return versions.map((version) => this.toRecord(version, used.get(version.id) ?? 0));
+  }
+
+  /**
+   * Every costing in force that spends on one head.
+   *
+   * The temple raises the saathupadi's salary once and it lands on every day of
+   * the festival. Finding those days one at a time, opening each, scrolling to
+   * the same line and typing the same figure is the work this exists to delete.
+   */
+  async headUsage(accountId: number, eventTypeId?: number): Promise<HeadUsageDto[]> {
+    const account = await this.prisma.account.findUnique({ where: { id: accountId } });
+
+    if (!account) throw new NotFoundException(`Account ${accountId} was not found`);
+
+    const costings = await this.prisma.eventCosting.findMany({
+      where: {
+        eventTypeId,
+        // Only what is in force. An earlier version is the record of a rate
+        // that has already been replaced; repricing it would rewrite history.
+        effectiveTo: null,
+        lines: { some: { accountId, parentLineId: null } },
+      },
+      include: COSTING_INCLUDE,
+      orderBy: [{ eventTypeId: 'asc' }, { slotId: 'asc' }],
+    });
+
+    return costings.flatMap((costing) => {
+      const line = costing.lines.find(
+        (entry) => entry.accountId === accountId && entry.parentLineId === null,
+      );
+
+      if (!line) return [];
+
+      return [
+        {
+          costingId: costing.id,
+          eventTypeId: costing.eventTypeId,
+          eventTypeName: costing.eventType.nameTa,
+          slotLabel: costing.slot
+            ? describeInstance(
+                costing.slot.eventType.frequencyType,
+                costing.slot.instanceIdentifier,
+                costing.slot.customInstanceName,
+              )
+            : null,
+          scope: costing.slotId === null ? 'Every instance' : 'This instance only',
+          effectiveFrom: isoDate(costing.effectiveFrom),
+          amount: toRupees(line.amount),
+          partyName: line.party?.nameTa ?? null,
+          isItemised: costing.lines.some((entry) => entry.parentLineId === line.id),
+        },
+      ];
+    });
+  }
+
+  /**
+   * Reprice one head across many costings.
+   *
+   * Each costing is saved the way it would be if somebody opened it and typed
+   * the figure in, so the versioning rule applies to each in turn: one written
+   * earlier keeps what it said, one written today is corrected. Nothing here is
+   * a shortcut past the record.
+   */
+  async updateHead(dto: UpdateHeadDto, context: ActorContext): Promise<HeadUsageDto[]> {
+    for (const change of dto.changes) {
+      const costing = await this.load(change.costingId);
+
+      const heading = costing.lines.find(
+        (line) => line.accountId === dto.accountId && line.parentLineId === null,
+      );
+
+      if (!heading) {
+        throw new BadRequestException(`Costing ${change.costingId} has no line on that head`);
+      }
+
+      if (costing.lines.some((line) => line.parentLineId === heading.id)) {
+        throw new BadRequestException(
+          `The line on costing ${change.costingId} is itemised, so its figure comes ` +
+            'from the items. Open it and change those instead',
+        );
+      }
+
+      const lines = this.linesFrom(costing).map((line) =>
+        line.accountId === dto.accountId ? { ...line, amount: change.amount } : line,
+      );
+
+      await this.update(change.costingId, { lines }, context);
+    }
+
+    return this.headUsage(dto.accountId);
   }
 
   async findOneOrFail(id: number): Promise<CostingRecordDto> {
