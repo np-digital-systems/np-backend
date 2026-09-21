@@ -1,9 +1,4 @@
-import {
-  BadRequestException,
-  ConflictException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 
 import { money, toRupees } from '../../common/money/money';
 import { ActorContext } from '../../common/types/authenticated-user';
@@ -22,7 +17,6 @@ import {
   EventBudgetDto,
   ExpectedAmountsDto,
   RaisePaymentDto,
-  RaiseReceiptDto,
 } from './dto/event-budget.dto';
 
 const EVENT_INCLUDE = {
@@ -148,93 +142,6 @@ export class EventBudgetsService {
       isFrozen: event.isCompleted,
       problem: null,
     };
-  }
-
-  /**
-   * The sponsor's receipt, filled in from the frozen quote.
-   *
-   * It stops at Draft. The cashier still names the date and how the money came,
-   * and still submits it into the same approval queue as every other entry:
-   * filling a form in is not the same as approving one.
-   */
-  async raiseReceipt(
-    eventId: number,
-    dto: RaiseReceiptDto,
-    context: ActorContext,
-  ): Promise<VoucherRecordDto> {
-    const event = await this.load(eventId);
-
-    if (!event.sponsor) {
-      throw new BadRequestException(
-        'That occurrence has no sponsor. Assign one before raising a receipt',
-      );
-    }
-
-    const already = await this.prisma.voucher.findFirst({
-      where: {
-        kind: VoucherKind.receipt,
-        status: { in: STANDING },
-        lines: { some: { eventId } },
-      },
-    });
-
-    if (already) {
-      throw new ConflictException(
-        `${already.ref} already receipts this occurrence; cancel it before raising another`,
-      );
-    }
-
-    /*
-     * The head and the fund come from the pooja type's activity, the same place
-     * the voucher form would have taken them from had a clerk filled this in by
-     * hand. The costing never held them: one answer, one place.
-     */
-    const coding = await this.costings.codingFor(event.slot.eventTypeId);
-
-    const costing = await this.costings.applicableTo(
-      event.slot.eventTypeId,
-      event.slotId,
-      event.scheduledDate,
-    );
-
-    if (!costing) {
-      const summary = await this.costings.resolve(event.slotId, event.scheduledDate);
-
-      throw new BadRequestException(summary.problem ?? 'No costing covers that day');
-    }
-
-    const voucher = await this.vouchers.create(
-      {
-        kind: VoucherKind.receipt,
-        date: dto.date ?? isoDate(new Date()),
-        description: `${this.describe(event)} — sponsorship`,
-        mode: dto.mode,
-        bankAccountId: dto.bankAccountId ?? undefined,
-        chequeNo: dto.chequeNo ?? undefined,
-        manualVoucherNo: dto.manualVoucherNo,
-        partyId: event.sponsor.id,
-        party: event.sponsor.nameTa,
-        lines: [
-          {
-            accountId: coding.accountId,
-            amount: dto.amount ?? toRupees(costing.sponsorAmount),
-            fundId: coding.fundId,
-            activityId: coding.activityId,
-            eventId,
-          },
-        ],
-      },
-      context,
-    );
-
-    await this.audit.record(context, {
-      action: 'create',
-      entity: 'event',
-      entityRef: String(eventId),
-      summary: `Raised ${voucher.ref} against ${this.describe(event)}`,
-    });
-
-    return voucher;
   }
 
   /**
