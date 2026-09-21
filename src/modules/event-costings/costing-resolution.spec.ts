@@ -142,3 +142,31 @@ describe('resolveCosting, on drafts', () => {
     expect(resolveCosting([typeWide, slotDraft], 7, on('2026-09-21'))?.id).toBe(1);
   });
 });
+
+describe('resolveCosting, several versions in one day', () => {
+  // 21 Sep in Colombo runs from 18:30Z on the 20th to 18:30Z on the 21st.
+  const day = (hourUtc: number) => new Date(Date.UTC(2026, 8, 21, hourUtc, 0, 0));
+
+  it('prices the day by the last version applied during it', () => {
+    const first = costing({ id: 1, effectiveFrom: null, effectiveTo: day(4) });
+    const second = costing({ id: 2, effectiveFrom: day(4), effectiveTo: day(9) });
+    const third = costing({ id: 3, effectiveFrom: day(9) });
+
+    expect(resolveCosting([first, second, third], 7, on('2026-09-21'))?.id).toBe(3);
+  });
+
+  it('prices the day before by the version in force at its end', () => {
+    const first = costing({ id: 1, effectiveFrom: null, effectiveTo: day(4) });
+    const second = costing({ id: 2, effectiveFrom: day(4) });
+
+    // The 20th ended at 18:30Z on the 20th, before either revision was made.
+    expect(resolveCosting([first, second], 7, on('2026-09-20'))?.id).toBe(1);
+  });
+
+  it('does not let a version applied tomorrow price today', () => {
+    const current = costing({ id: 1, effectiveFrom: null });
+    const tomorrow = costing({ id: 2, effectiveFrom: new Date(Date.UTC(2026, 8, 22, 6, 0, 0)) });
+
+    expect(resolveCosting([current, tomorrow], 7, on('2026-09-21'))?.id).toBe(1);
+  });
+});
