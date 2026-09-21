@@ -847,13 +847,16 @@ model EventCosting {
   /// Null means it has always applied — the first version a scope ever had,
   /// which has no predecessor to start after and so prices every day before it
   /// as well as every day since.
-  effectiveFrom DateTime?     @map("effective_from") @db.Date
+  effectiveFrom DateTime?     @map("effective_from") @db.Timestamptz(6)
   /// Null means still in force. Closed by the version that succeeds it.
-  effectiveTo   DateTime?     @map("effective_to") @db.Date
+  effectiveTo   DateTime?     @map("effective_to") @db.Timestamptz(6)
   /// Draft until the committee applies it. A draft is exempt from the one-per-
   /// scope exclusion, so next year's revision can be written and argued over
   /// while the version being quoted from stays in force.
   status        CostingStatus @default(draft)
+  /// 1, 2, 3 within the scope, in the order they were applied. Null while it is
+  /// a draft: a version it has not become yet has no number.
+  versionNo     Int?          @map("version_no")
   /// What the sponsor is asked for: the lines charged to them, added up. Stored
   /// rather than summed on read so the figure a family was quoted survives a
   /// line being corrected afterwards.
