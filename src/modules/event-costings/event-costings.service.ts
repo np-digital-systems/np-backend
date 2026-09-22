@@ -63,14 +63,11 @@ function readCoding(
   };
 }
 
-/** An item's amount follows from its quantity; a heading's is its own. */
+/** A heading with items is their sum; one without carries its own figure. */
 const lineAmount = (line: WriteCostingLineDto): Prisma.Decimal =>
   (line.items ?? []).length > 0
     ? (line.items ?? [])
-        .reduce(
-          (total, item) => total.plus(money(item.quantity).times(money(item.unitAmount))),
-          money(0),
-        )
+        .reduce((total, item) => total.plus(money(item.amount)), money(0))
         .toDecimalPlaces(2)
     : money(line.amount ?? 0);
 
@@ -136,7 +133,16 @@ export class EventCostingsService {
         ...(conditions.length > 0 ? { AND: conditions } : {}),
       },
       include: COSTING_INCLUDE,
-      orderBy: [{ eventTypeId: 'asc' }, { slotId: 'asc' }, { effectiveFrom: 'desc' }],
+      /*
+       * By version number, not by start date. The first version of a scope has
+       * no start, and Postgres sorts a null first on a descending order, so
+       * ordering by date put version 1 above version 3.
+       */
+      orderBy: [
+        { eventTypeId: 'asc' },
+        { slotId: 'asc' },
+        { versionNo: { sort: 'desc', nulls: 'first' } },
+      ],
     });
 
     const used = await this.usageByCosting(costings.map((costing) => costing.id));
@@ -157,7 +163,9 @@ export class EventCostingsService {
     const versions = await this.prisma.eventCosting.findMany({
       where: { eventTypeId: costing.eventTypeId, slotId: costing.slotId },
       include: COSTING_INCLUDE,
-      orderBy: { effectiveFrom: 'desc' },
+      // Newest first, the draft above them all. See `findMany` for why this is
+      // not ordered by date.
+      orderBy: { versionNo: { sort: 'desc', nulls: 'first' } },
     });
 
     const used = await this.usageByCosting(versions.map((version) => version.id));
@@ -454,6 +462,21 @@ export class EventCostingsService {
      * is what lets the committee revise three times in an afternoon and keep
      * all three, which a date could not — two versions cannot share a day.
      */
+    /*
+     * A version that changes nothing is a decision nobody made.
+     *
+     * The screen disables Apply while a draft matches what is in force, but the
+     * endpoint is what the books are protected by: applying an identical draft
+     * would close a version and open another with the same figures, and a
+     * year-end reader would find a rate change on a day the rate held still.
+     */
+    if (predecessor && (await this.matches(predecessor.id, draft))) {
+      throw new ConflictException(
+        `That draft is the same as version ${predecessor.versionNo ?? '?'}, which is already ` +
+          'in force. Change a figure before applying it',
+      );
+    }
+
     const at = new Date();
 
     const appliedId = await this.prisma.$transaction(async (tx) => {
@@ -582,8 +605,8 @@ export class EventCostingsService {
    *
    * The fund and the activity are not written from the form — they are the
    * pooja type's own, carried down onto every line so that a report never has
-   * to ask the costing where its money is held. An item's amount follows from
-   * its quantity and unit price; a heading with items is their sum.
+   * to ask the costing where its money is held. A heading with items under it
+   * is their sum, and the items are what the quote shows a family.
    */
   private async writeLines(
     tx: Prisma.TransactionClient,
@@ -623,9 +646,7 @@ export class EventCostingsService {
             fundId: coding.fundId,
             activityId: coding.activityId,
             partyId: heading.partyId ?? null,
-            amount: money(item.quantity).times(money(item.unitAmount)).toDecimalPlaces(2),
-            quantity: item.quantity,
-            unitAmount: item.unitAmount,
+            amount: money(item.amount).toDecimalPlaces(2),
             chargedToSponsor: heading.chargedToSponsor ?? true,
           },
         });
@@ -647,8 +668,7 @@ export class EventCostingsService {
           .filter((line) => line.parentLineId === heading.id)
           .map((item) => ({
             label: item.label ?? '',
-            quantity: toRupees(item.quantity ?? 0),
-            unitAmount: toRupees(item.unitAmount ?? 0),
+            amount: toRupees(item.amount),
           })),
       }));
   }
@@ -732,6 +752,35 @@ export class EventCostingsService {
   }
 
   // ── reading ───────────────────────────────────────────────────────────────
+
+  /**
+   * Whether a draft says exactly what another version already says.
+   *
+   * Compared on what the temple actually decided — the heads, the amounts, who
+   * bears them and how each was itemised — and not on ids, line numbers or when
+   * the rows were written, none of which the committee chose.
+   */
+  private async matches(againstId: number, draft: CostingRow): Promise<boolean> {
+    const against = await this.load(againstId);
+
+    if (!against.sponsorAmount.equals(draft.sponsorAmount)) return false;
+
+    const shape = (costing: CostingRow) =>
+      JSON.stringify(
+        costing.lines
+          .map((line) => ({
+            parent: line.parentLineId === null,
+            label: line.label,
+            accountId: line.accountId,
+            amount: line.amount.toFixed(2),
+            partyId: line.partyId,
+            chargedToSponsor: line.chargedToSponsor,
+          }))
+          .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right))),
+      );
+
+    return shape(against) === shape(draft) && against.notes === draft.notes;
+  }
 
   private async load(id: number): Promise<CostingRow> {
     const costing = await this.prisma.eventCosting.findUnique({
@@ -861,8 +910,6 @@ export class EventCostingsService {
         id: item.id,
         lineNo: item.lineNo,
         label: item.label ?? '',
-        quantity: toRupees(item.quantity ?? 0),
-        unitAmount: toRupees(item.unitAmount ?? 0),
         amount: toRupees(item.amount),
       }));
 

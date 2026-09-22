@@ -23,9 +23,7 @@ export class CostingItemDto {
   @ApiProperty() id!: number;
   @ApiProperty() lineNo!: number;
   @ApiProperty({ description: 'Coconut, milk, curd' }) label!: string;
-  @ApiProperty({ description: 'How many' }) quantity!: number;
-  @ApiProperty({ description: 'What one costs' }) unitAmount!: number;
-  @ApiProperty({ description: 'Quantity times the unit price' }) amount!: number;
+  @ApiProperty({ description: 'What this part of the head comes to' }) amount!: number;
 }
 
 /** One heading — the level that reaches the ledger. */
@@ -119,17 +117,11 @@ export class WriteCostingItemDto {
   @MaxLength(160)
   label!: string;
 
-  @ApiProperty({ description: 'How many', minimum: 0.001 })
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 3 })
-  @IsPositive()
-  quantity!: number;
-
-  @ApiProperty({ description: 'What one costs', minimum: 0.01 })
+  @ApiProperty({ description: 'What this part of the head comes to', minimum: 0.01 })
   @Type(() => Number)
   @IsNumber({ maxDecimalPlaces: 2 })
   @IsPositive()
-  unitAmount!: number;
+  amount!: number;
 }
 
 /**
