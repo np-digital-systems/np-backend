@@ -4,7 +4,7 @@ import { IsBoolean, IsEnum, IsInt, IsOptional, IsString, MaxLength, Min } from '
 
 import { ActivityKind } from '../../../generated/prisma/enums';
 
-export class ActivityDto {
+class ActivityDto {
   @ApiProperty() id!: number;
   @ApiProperty({ description: 'Tamil name — the language the books are kept in' }) name!: string;
   @ApiProperty() nameEn!: string;
