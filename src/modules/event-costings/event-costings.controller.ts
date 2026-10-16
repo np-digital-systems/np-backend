@@ -67,12 +67,7 @@ export class EventCostingsController {
     return this.costings.create(dto, context);
   }
 
-  /*
-   * The same permission as saving one. Splitting applying from managing would
-   * be defensible — writing next year's figures and deciding today is the day
-   * they start being quoted are different acts — but nobody has asked for that,
-   * and a permission no seeded role holds is an Apply button nobody can press.
-   */
+  // Same permission as saving; no seeded role would hold a separate apply permission.
   @Post(':id/apply')
   @RequirePermissions('event-costing:manage')
   @ApiOperation({ summary: 'Put a draft into force, closing the version it replaces' })
