@@ -2,7 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import { IsInt, IsString, Max, MaxLength, Min, MinLength, IsOptional } from 'class-validator';
 
-export const SEARCH_TYPES = [
+const SEARCH_TYPES = [
   'User',
   'Event',
   'Receipt',

@@ -1,23 +1,14 @@
 import { BadRequestException } from '@nestjs/common';
 
-/**
- * Where a pooja's money is coded, worked out rather than asked for again.
- *
- * The temple already answers this once, on the activity a pooja type points at:
- * the head a receipt for it lands on, and the fund it is held in. The costing
- * reads that answer instead of keeping its own, because a fact stored in two
- * places is a fact that eventually disagrees with itself — somebody edits the
- * activity, the costing keeps the old head, and no screen can say which is right.
- */
+// Coding is read from the pooja type's activity rather than stored on the costing, so the two can't drift.
 export interface PoojaCoding {
-  /** The income head a sponsor's receipt lands on. */
+  /** Income head for the sponsor's receipt. */
   accountId: number;
-  /** The fund it is held in, and the one every expense line is carried in. */
+  /** Fund for the receipt and every expense line. */
   fundId: number;
   activityId: number;
 }
 
-/** What is missing, in the words the screen should use. */
 export function explainMissingCoding(typeName: string, activityNamed: boolean): string {
   if (!activityNamed) {
     return (

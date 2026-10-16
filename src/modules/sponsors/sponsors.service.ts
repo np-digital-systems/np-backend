@@ -37,12 +37,7 @@ type SponsorRow = Prisma.SponsorGetPayload<{ include: typeof SPONSOR_INCLUDE }>;
 
 const round = (value: number) => Math.round(value * 100) / 100;
 
-/**
- * The sponsor register.
- *
- * A sponsor is a party with a profile, so the identity is edited through the
- * party and only what makes them a sponsor is stored here.
- */
+// A sponsor is a party with a profile: identity lives on the party, only sponsor fields here.
 @Injectable()
 export class SponsorsService {
   constructor(
@@ -157,7 +152,7 @@ export class SponsorsService {
     return this.toDto(sponsor, true);
   }
 
-  /** Edits the party behind the sponsor, so a rename reaches every screen. */
+  // Edits the underlying party, so a rename applies everywhere.
   async update(
     partyId: number,
     dto: UpdateSponsorProfileDto,
@@ -226,11 +221,7 @@ export class SponsorsService {
     return party.id;
   }
 
-  /*
-   * Making a sponsor exempt hides the year's dues from them. Doing it after
-   * they have already paid would leave a payment the register no longer
-   * expects, so the exemption is refused rather than the payment orphaned.
-   */
+  // Refuse exemption after they've paid this year, or the payment would be orphaned.
   private async assertNoPaymentsBlockExemption(partyId: number): Promise<void> {
     const year = new Date().getFullYear();
     const paid = await this.prisma.sanththaPayment.count({ where: { sponsorId: partyId, year } });

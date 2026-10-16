@@ -4,19 +4,8 @@ import { IsDateString, IsInt, IsOptional, Max, Min } from 'class-validator';
 
 import { FrequencyType } from '../../../generated/prisma/enums';
 
-/**
- * An occurrence as the public website is allowed to see it.
- *
- * Deliberately not `EventRecordDto`: no audit stamps, no derived `isOverdue`,
- * and of the sponsor only their name. A temple names the family who gave for a
- * pooja on its notice board, so the name is public by intent; their email,
- * phone and address are not, and never leave this shape.
- *
- * Both event-type names travel so the site can render the calendar in whichever
- * language the visitor chose, and the raw `frequencyType` / `instanceIdentifier`
- * travel instead of a rendered English label so the site can phrase "Week 24"
- * in Tamil too.
- */
+// Public shape: sponsor name only (public by intent), never contact details or audit fields.
+// Raw frequency and instance number are sent so the site can localise labels.
 export class PublicEventDto {
   @ApiProperty() id!: number;
   @ApiProperty() eventTypeId!: number;

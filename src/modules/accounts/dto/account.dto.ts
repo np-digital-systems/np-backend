@@ -22,7 +22,7 @@ export class AccountRefDto {
   @ApiProperty({ enum: AccountType }) type!: AccountType;
 }
 
-export class AccountDto extends AccountRefDto {
+class AccountDto extends AccountRefDto {
   @ApiProperty({ nullable: true }) parentId!: number | null;
   @ApiProperty() isPostable!: boolean;
   @ApiProperty({

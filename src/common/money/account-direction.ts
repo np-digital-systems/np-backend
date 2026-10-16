@@ -1,13 +1,7 @@
 import { AccountType } from '../../generated/prisma/enums';
 
-/**
- * Which side increases an account.
- *
- * Assets and expenses grow on the debit side; liabilities, equity and income
- * grow on the credit side. Every balance in this codebase is derived from the
- * ledger through this function, so the chart of accounts cannot disagree with
- * the entries that produced it.
- */
+// Assets and expenses increase on the debit side; liabilities, equity and income on the credit side.
+// Every balance is derived through this.
 export function isDebitNatured(type: AccountType): boolean {
   return type === AccountType.asset || type === AccountType.expense;
 }

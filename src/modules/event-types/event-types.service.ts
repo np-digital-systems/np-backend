@@ -40,13 +40,10 @@ export class EventTypesService {
     });
 
     const [sponsors, scheduled] = await Promise.all([
-      // A sponsorship reaches its type through the slot it holds, the same
-      // way an event does, so both are counted by slot and rolled up.
+      // Sponsorships and events reach their type via the slot, so count by slot and roll up.
       this.prisma.eventTypeSponsor.findMany({
         select: { slot: { select: { eventTypeId: true } } },
       }),
-      // Events reach their type through a slot, so they are counted by slot
-      // and rolled up rather than grouped on a column that no longer exists.
       this.prisma.event.findMany({
         where: this.withinYear(year),
         select: { slot: { select: { eventTypeId: true } } },
@@ -82,12 +79,6 @@ export class EventTypesService {
     return this.toRecord(type, sponsorSlots, scheduledCount);
   }
 
-  /**
-   * A type's slots — the fixed structure of its year.
-   *
-   * The one screen where the shape of a pooja can be set out before any date
-   * exists: name the slot, see who takes it, see whether it has been scheduled.
-   */
   async slots(eventTypeId: number, year = new Date().getFullYear()): Promise<EventSlotDto[]> {
     const type = await this.prisma.eventType.findUnique({ where: { id: eventTypeId } });
 
@@ -153,11 +144,7 @@ export class EventTypesService {
   async create(dto: CreateEventTypeDto, context: ActorContext): Promise<EventTypeRecordDto> {
     await this.assertActivityIsUsable(dto.activityId ?? null);
 
-    /*
-     * A type's slots come into being with it. They are the structure of the
-     * temple year — the rows sponsors attach to and occurrences are dated
-     * against — so a type without them could never be scheduled.
-     */
+    // Slots are created with the type; without them it could never be scheduled.
     const type = await this.prisma.eventType.create({
       data: {
         nameTa: dto.nameTa,
@@ -213,9 +200,7 @@ export class EventTypesService {
       },
     });
 
-    // The slots follow the count: a longer year gains them, a shorter one
-    // loses the surplus — and only ever after assertNoSlotsBeyond has proved
-    // nothing is standing on the ones about to go.
+    // Sync slots to the count; surplus slots are removed only after assertNoSlotsBeyond.
     if (dto.noOfInstances !== undefined && dto.noOfInstances !== before.noOfInstances) {
       await this.syncSlots(id, dto.noOfInstances);
     }
@@ -238,7 +223,6 @@ export class EventTypesService {
 
     const [events, vouchers] = await Promise.all([
       this.prisma.event.count({ where: { slot: { eventTypeId: id } } }),
-      // A voucher reaches a pooja type through the occurrence on its lines.
       this.prisma.voucherLine.count({ where: { event: { slot: { eventTypeId: id } } } }),
     ]);
 
@@ -258,11 +242,7 @@ export class EventTypesService {
     });
   }
 
-  /**
-   * A default is a suggestion, but a wrong one is worse than none: it would put
-   * every receipt for the pooja against a project in the wrong fund, quietly.
-   */
-  /** The activity carries the fund in turn, so only the activity is checked. */
+  // Only the activity is checked; it carries the fund.
   private async assertActivityIsUsable(activityId: number | null): Promise<void> {
     if (activityId === null) return;
 
@@ -299,7 +279,7 @@ export class EventTypesService {
     });
   }
 
-  /** Shrinking a year would orphan sponsors and events sitting on the lost slots. */
+  // Shrinking would orphan sponsors and events on the removed slots.
   private async assertNoSlotsBeyond(id: number, noOfInstances: number): Promise<void> {
     const [sponsors, events] = await Promise.all([
       this.prisma.eventTypeSponsor.count({

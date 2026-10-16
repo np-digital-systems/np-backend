@@ -6,8 +6,7 @@ import { SanththaController } from './sanththa.controller';
 import { SanththaService } from './sanththa.service';
 
 @Module({
-  // The subscription receipt is raised through VouchersService, so reference
-  // allocation, coding validation and posting stay defined in one place.
+  // Receipts go through VouchersService so numbering, coding checks and posting stay in one place.
   imports: [AuthModule, VouchersModule],
   controllers: [SanththaController],
   providers: [SanththaService],

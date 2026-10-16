@@ -18,7 +18,7 @@ const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? val
 const emptyToNull = ({ value }: { value: unknown }) =>
   typeof value === 'string' && value.trim() === '' ? null : trim({ value });
 
-export class PartyDto {
+class PartyDto {
   @ApiProperty() id!: number;
   @ApiProperty({ enum: PartyType }) type!: PartyType;
   @ApiProperty({ description: 'Tamil name — the language the books are kept in' }) name!: string;

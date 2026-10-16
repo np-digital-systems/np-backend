@@ -10,15 +10,7 @@ import {
   VoucherStatus,
 } from '../../generated/prisma/enums';
 
-/**
- * The wire spelling of every enum whose database value is not a valid
- * identifier.
- *
- * Prisma names an enum member `onHold` and stores `on-hold`; the client only
- * ever sees the stored spelling. Translating here keeps the published contract
- * independent of the ORM's identifier rules, rather than leaking `onHold` to a
- * frontend that switches on `on-hold`.
- */
+// Maps Prisma enum identifiers (onHold) to their stored wire values (on-hold) so the API never leaks ORM names.
 interface Codec<Prisma extends string, Wire extends string> {
   readonly values: readonly Wire[];
   toWire(value: Prisma): Wire;

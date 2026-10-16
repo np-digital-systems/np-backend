@@ -166,12 +166,7 @@ export class AssetsService {
     return this.findOneOrFail(id);
   }
 
-  /**
-   * Part the temple from something it owns.
-   *
-   * Dating the disposal is what stops depreciation, so this is a distinct
-   * action rather than a status field anyone can set.
-   */
+  // A separate action, not a status field: the disposal date stops depreciation.
   async dispose(id: number, dto: DisposeAssetDto, context: ActorContext): Promise<AssetRecordDto> {
     const before = await this.prisma.asset.findUnique({ where: { id } });
 

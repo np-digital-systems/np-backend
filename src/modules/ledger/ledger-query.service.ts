@@ -5,7 +5,6 @@ import { Prisma } from '../../generated/prisma/client';
 import { AccountType, VoucherStatus } from '../../generated/prisma/enums';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 
-/** The analytical dimensions carried on a coding line. */
 type Dimension = 'activityId' | 'partyId' | 'eventId';
 
 export interface Sides {
@@ -16,13 +15,7 @@ export interface Sides {
 
 const EMPTY: Sides = { debit: 0, credit: 0, count: 0 };
 
-/**
- * Aggregation over posted ledger entries.
- *
- * Every derived balance in the accounting modules comes through here, so there
- * is exactly one definition of "what the ledger says" and it always excludes
- * vouchers that have not reached `Posted`.
- */
+// The single source for derived balances; only Posted vouchers are counted.
 @Injectable()
 export class LedgerQueryService {
   constructor(private readonly prisma: PrismaService) {}
@@ -72,11 +65,7 @@ export class LedgerQueryService {
     return (await this.byAccount(financialYearId)).get(accountId) ?? EMPTY;
   }
 
-  /*
-   * The two analytical dimensions. Both are carried only on the income or
-   * expense line of a voucher, never on its cash or bank contra, so summing
-   * either one reads the substance of the entry rather than netting to nil.
-   */
+  // Dimensions are only on coding lines (not the contra), so sums don't net to nil.
   async byActivity(financialYearId?: number): Promise<Map<number, Sides>> {
     return this.byDimension('activityId', financialYearId);
   }
@@ -85,21 +74,11 @@ export class LedgerQueryService {
     return this.byDimension('partyId', financialYearId);
   }
 
-  /**
-   * Totals per dated occurrence — what a village collection actually raised
-   * for this year's மார்கழி, rather than for the observance in general.
-   */
   async byEvent(financialYearId?: number): Promise<Map<number, Sides>> {
     return this.byDimension('eventId', financialYearId);
   }
 
-  /**
-   * Totals per dimension, split by the type of head each entry sits on.
-   *
-   * An activity's income and expenditure are two different questions asked of
-   * the same rows, so they are gathered in one pass and separated by account
-   * type rather than queried twice.
-   */
+  // One pass, split by account type (income vs expense).
   async byDimensionAndType(
     dimension: Dimension,
     financialYearId?: number,

@@ -36,10 +36,7 @@ const ACCOUNT_SELECT = {
 
 type AccountRow = Prisma.UserAccountGetPayload<{ select: typeof ACCOUNT_SELECT }>;
 
-/**
- * Sign-ins. Credentials only — a name, phone or address is edited on the party
- * through PartiesService, never here.
- */
+// Credentials only; name and contact details are edited on the party.
 @Injectable()
 export class UserAccountsService {
   constructor(

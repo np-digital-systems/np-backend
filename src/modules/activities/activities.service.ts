@@ -17,13 +17,7 @@ type ActivityRow = Prisma.ActivityGetPayload<Record<string, never>>;
 
 const round = (value: number) => Math.round(value * 100) / 100;
 
-/**
- * Activities — what an entry was for.
- *
- * The one dimension that sits on both sides of the books, which is what lets a
- * pooja be read whole: sponsorship in against priest time out. An income head
- * can only ever show the money coming in.
- */
+// Activities apply to both income and expense, so a pooja's income and costs can be reported together.
 @Injectable()
 export class ActivitiesService {
   constructor(
@@ -100,11 +94,7 @@ export class ActivitiesService {
 
     if (!before) throw new NotFoundException(`Activity ${id} was not found`);
 
-    /*
-     * Checked against what the row will hold, not what the request carried:
-     * moving the fund alone still has to be checked against the project already
-     * on the activity, or the pair could be left pointing at different funds.
-     */
+    // Validate the resulting row, not just the request, so fund and project can't end up mismatched.
     const defaultFundId =
       dto.defaultFundId === undefined ? before.defaultFundId : (dto.defaultFundId ?? null);
     const defaultProjectId =
@@ -147,12 +137,7 @@ export class ActivitiesService {
     return this.update(id, { isActive: false }, context);
   }
 
-  /*
-   * An activity with posted entries is never removed — the entries name it, and
-   * a statement that has been read has to keep meaning what it said. Closing a
-   * pooja therefore means deactivating it, which keeps it out of the pickers
-   * while leaving every report that mentions it intact.
-   */
+  // Activities with posted entries are deactivated, never deleted, so past reports stay valid.
   private async assertNothingDependsOnIt(id: number, nameTa: string): Promise<void> {
     const eventTypes = await this.prisma.eventType.count({ where: { activityId: id } });
 
@@ -163,14 +148,7 @@ export class ActivitiesService {
     }
   }
 
-  /**
-   * The three defaults have to make sense together.
-   *
-   * A project belongs to exactly one fund, so an activity offering both must
-   * offer a pair that agree — otherwise picking the activity would fill a
-   * voucher with a project the fund does not carry, and the clerk would have
-   * to notice before the API refused it.
-   */
+  // A project belongs to one fund, so the default project must be in the default fund.
   private async assertCodingIsUsable(
     fundId: number | null,
     projectId: number | null,
@@ -212,8 +190,7 @@ export class ActivitiesService {
     const income = totals?.get(AccountType.income);
     const expense = totals?.get(AccountType.expense);
 
-    // Each side is read in its own natural direction, so both come out
-    // positive and the difference between them means what it looks like.
+    // Each side in its natural direction, so both are positive.
     const earned = income ? income.credit - income.debit : 0;
     const spent = expense ? expense.debit - expense.credit : 0;
 

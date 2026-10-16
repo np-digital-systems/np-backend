@@ -8,7 +8,7 @@ export class FundRefDto {
   @ApiProperty() nameTa!: string;
 }
 
-export class FundDto extends FundRefDto {
+class FundDto extends FundRefDto {
   @ApiProperty() opening!: number;
   @ApiProperty() income!: number;
   @ApiProperty() expenses!: number;
