@@ -9,14 +9,8 @@ import {
 } from './dto/public-event.dto';
 import { EventsService } from './events.service';
 
-/**
- * The temple calendar as the public website reads it.
- *
- * Separate from EventsController rather than a flag on it: these routes carry
- * no bearer token, so the shape they return has to be safe by construction
- * rather than by remembering to pass `canSeeContact: false`. Nothing here
- * exposes a sponsor, and nothing here writes.
- */
+// Separate controller so unauthenticated responses are safe by construction: read-only, and only
+// a sponsor's name, never their contact details.
 @ApiTags('public')
 @Public()
 @Controller('public/events')
