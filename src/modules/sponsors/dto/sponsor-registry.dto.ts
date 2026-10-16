@@ -17,7 +17,6 @@ const trim = ({ value }: { value: unknown }) => (typeof value === 'string' ? val
 const emptyToNull = ({ value }: { value: unknown }) =>
   typeof value === 'string' && value.trim() === '' ? null : trim({ value });
 
-/** A sponsor: the party's identity, plus the profile that makes them one. */
 export class SponsorDto {
   @ApiProperty({ description: 'The party id — a sponsor is a party, not a separate record' })
   partyId!: number;
@@ -42,7 +41,7 @@ export class SponsorRegisterRowDto extends SponsorDto {
   @ApiProperty() paidThisYear!: boolean;
 }
 
-/** Enrol a sponsor. Give an existing party, or a name to register one. */
+// Pass an existing partyId, or a name to create a new party.
 export class EnrolSponsorDto {
   @ApiPropertyOptional({ description: 'An existing party. Omit to register a new person' })
   @IsOptional()
@@ -104,10 +103,7 @@ export class EnrolSponsorDto {
   notes?: string | null;
 }
 
-/**
- * Editing a sponsor edits the party behind them, which is why a rename here
- * renames them on every screen at once.
- */
+// Edits the underlying party, so a rename applies everywhere.
 export class UpdateSponsorProfileDto {
   @ApiPropertyOptional()
   @IsOptional()
