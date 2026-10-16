@@ -25,7 +25,6 @@ import {
 import { PublicEventDto } from './dto/public-event.dto';
 import { deriveEventStatus, isOverdue } from './event-status';
 
-/** Contact detail lives on the party itself. */
 const SPONSOR_SELECT = {
   id: true,
   nameTa: true,
@@ -42,7 +41,7 @@ const EVENT_INCLUDE = {
   sponsor: { select: SPONSOR_SELECT },
 } satisfies Prisma.EventInclude;
 
-/** The public site sees a sponsor's name and nothing else — see PublicEventDto. */
+// Public responses expose only the sponsor's name; contact details never leave the API.
 const PUBLIC_INCLUDE = {
   slot: { include: { eventType: true } },
   sponsor: { select: { nameTa: true, nameEn: true } },
@@ -52,11 +51,11 @@ type EventRow = Prisma.EventGetPayload<{ include: typeof EVENT_INCLUDE }>;
 type PublicEventRow = Prisma.EventGetPayload<{ include: typeof PUBLIC_INCLUDE }>;
 type SponsorRow = Prisma.PartyGetPayload<{ select: typeof SPONSOR_SELECT }>;
 
-/** `HH:mm` on an arbitrary date — Postgres `time` carries no day. */
+// Postgres `time` has no date, so HH:mm is stored on an arbitrary day.
 const timeToDate = (value: string): Date => new Date(`1970-01-01T${value}:00Z`);
 const dateToTime = (value: Date): string => value.toISOString().slice(11, 16);
 
-/** `scheduled_date` is a Postgres `date`, so it compares against UTC midnight. */
+// scheduled_date is a Postgres `date`, which compares against UTC midnight.
 const startOfUtcDay = (value: Date): Date =>
   new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
 
@@ -90,14 +89,7 @@ export class EventsService {
     return this.toRecord(event, canSeeContact);
   }
 
-  /**
-   * Everyone worth offering on a collection sheet for one occurrence.
-   *
-   * "Contributor" is not a role and is never stored: it is computed from what
-   * people actually gave to earlier occurrences of the same slot. Sponsors,
-   * vendors and devotees follow behind, so a name typed for the first time is
-   * still one search away.
-   */
+  // Contributors are computed from past gifts to the same slot, then sponsors, vendors and devotees follow.
   async contributors(eventId: number, canSeeContact: boolean): Promise<ContributorDto[]> {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
@@ -107,8 +99,7 @@ export class EventsService {
     if (!event) throw new NotFoundException(`Event ${eventId} was not found`);
 
     const [gave, alreadyGiven, roles] = await Promise.all([
-      // Earlier years of this same slot, through the lines rather than the
-      // ledger so a draft receipt does not count as money in.
+      // Read from voucher lines, not the ledger, so draft receipts don't count as money received.
       this.prisma.voucherLine.findMany({
         where: {
           event: { slotId: event.slotId, id: { not: eventId } },
@@ -149,8 +140,7 @@ export class EventsService {
       paid.set(partyId, (paid.get(partyId) ?? 0) + toRupees(line.amount));
     }
 
-    // Their most recent gift, not their first: what they gave last time is the
-    // figure a collector wants prefilled.
+    // Most recent gift, which is the figure to prefill.
     const history = new Map<number, { amount: number; year: number }>();
     for (const line of gave) {
       const partyId = line.voucher.partyId!;
@@ -164,8 +154,7 @@ export class EventsService {
 
     const byId = new Map(roles.map((party) => [party.id, party]));
 
-    // Anyone in the history who no longer holds a role still belongs on the
-    // sheet -- they gave last year, which is the strongest reason of all.
+    // Past contributors stay on the sheet even without a current role.
     const missing = [...history.keys()].filter((id) => !byId.has(id));
 
     if (missing.length > 0) {
@@ -207,7 +196,7 @@ export class EventsService {
       };
     });
 
-    // Those who gave before lead, biggest first; the rest fall in by name.
+    // Past contributors first by amount, then everyone else by name.
     const ORDER: Record<ContributorDto['reason'], number> = {
       'gave-before': 0,
       sponsor: 1,
@@ -245,12 +234,7 @@ export class EventsService {
     };
   }
 
-  /**
-   * A year of one or more event types, slot by slot.
-   *
-   * Every planned instance appears whether or not it has been calendared yet,
-   * which is what makes this a planning view rather than a list of what exists.
-   */
+  // Includes every planned slot, scheduled or not.
   async schedule(
     year: number,
     canSeeContact: boolean,
@@ -265,8 +249,7 @@ export class EventsService {
     const ids = types.map((type) => type.id);
 
     const [sponsors, events] = await Promise.all([
-      // Every sponsorship holds a slot, so they are gathered by the type those
-      // slots belong to and matched back onto each slot below.
+      // Gathered by event type, then matched to each slot below.
       this.prisma.eventTypeSponsor.findMany({
         where: { slot: { eventTypeId: { in: ids } } },
         include: { party: { select: SPONSOR_SELECT } },
@@ -277,12 +260,7 @@ export class EventsService {
       }),
     ]);
 
-    /*
-     * A slot can hold several dates in one year — a monthly pooja falling twice
-     * in a Tamil month, or thirteen times across a Gregorian one — so its
-     * occurrences are grouped rather than indexed, and the earliest stands for
-     * the slot on this screen.
-     */
+    // A slot can have several dates a year (monthly poojas), so group them; the earliest represents the slot.
     const dated = new Map<number, typeof events>();
 
     for (const row of events) {
@@ -311,8 +289,6 @@ export class EventsService {
             slot.customInstanceName,
           ),
           customInstanceName: slot.customInstanceName,
-          // The shortlist this slot is scheduled from: everyone who takes it,
-          // for a clerk to choose one of when the year is set out.
           sponsors: candidates.map((row) => this.toSponsor(row.party, canSeeContact)),
           defaultSponsor: candidates[0] ? this.toSponsor(candidates[0].party, canSeeContact) : null,
           sponsorCount: candidates.length,
@@ -332,13 +308,7 @@ export class EventsService {
     });
   }
 
-  /**
-   * The next few occurrences, for the public website.
-   *
-   * Completed ones are excluded rather than filtered by date alone: an
-   * occurrence somebody has already closed off is history, even if its date has
-   * not passed in the visitor's timezone yet.
-   */
+  // Excludes completed occurrences even if their date hasn't passed yet.
   async publicUpcoming(limit = 6, today: Date = new Date()): Promise<PublicEventDto[]> {
     const events = await this.prisma.event.findMany({
       where: { scheduledDate: { gte: startOfUtcDay(today) }, isCompleted: false },
@@ -350,12 +320,7 @@ export class EventsService {
     return events.map((event) => this.toPublic(event));
   }
 
-  /**
-   * Every occurrence in a window, for the website's calendar.
-   *
-   * The window is capped so an anonymous caller cannot ask for the whole table
-   * in one request; the site only ever paints a couple of years of months.
-   */
+  // The window is capped so an anonymous caller can't request the whole table.
   async publicCalendar(
     from?: string,
     to?: string,
@@ -395,7 +360,7 @@ export class EventsService {
     this.assertTimes(dto.startTime, dto.endTime);
     await this.assertFreeThatYear(slot.id, new Date(dto.scheduledDate));
 
-    // An occurrence falls to its slot's registered sponsor unless one is named.
+    // Defaults to the slot's registered sponsor unless one is named.
     const sponsorPartyId = dto.sponsorPartyId ?? (await this.standingSponsor(slot.id));
 
     if (sponsorPartyId) await this.assertSponsorIsUsable(sponsorPartyId);
@@ -525,20 +490,7 @@ export class EventsService {
     });
   }
 
-  /**
-   * The sponsor a new occurrence falls to when none is named.
-   *
-   * Only an unambiguous choice is filled in: a single sponsor pinned to this
-   * instance. Once a slot has several, picking one for the user would be a
-   * guess, so the occurrence is left unsponsored for someone to decide.
-   */
-  /**
-   * The sponsor an occurrence falls to when none is named.
-   *
-   * Only where the slot has exactly one. Several devotees sharing a slot is a
-   * shortlist, and which of them takes a given year is a decision somebody
-   * makes — guessing would put a name on a receipt that nobody chose.
-   */
+  // Only defaults when the slot has exactly one sponsor; with several, someone must choose.
   private async standingSponsor(slotId: number): Promise<number | undefined> {
     const pinned = await this.prisma.eventTypeSponsor.findMany({
       where: { slotId },
@@ -559,13 +511,7 @@ export class EventsService {
     if (!party.isActive) throw new BadRequestException(`${party.nameTa} is retired`);
   }
 
-  /**
-   * The slot an occurrence belongs to, by type and instance number.
-   *
-   * Writes still name a type and a number, which is how a clerk thinks of it;
-   * the slot row is the identity everything else hangs from. Refusing an
-   * instance the type does not declare is what a loose pair could never do.
-   */
+  // Writes name a type and instance number; this resolves the slot and rejects undeclared instances.
   private async resolveSlot(eventTypeId: number, instanceIdentifier: number) {
     const slot = await this.prisma.eventSlot.findUnique({
       where: {
@@ -591,13 +537,7 @@ export class EventsService {
     return slot;
   }
 
-  /**
-   * A slot is set out once a year.
-   *
-   * The database refuses a second one outright; this says which occurrence is
-   * already there, so a clerk is told what they collided with rather than that
-   * something already exists.
-   */
+  // The DB allows one occurrence per slot per year; this names the existing one in the error.
   private async assertFreeThatYear(
     slotId: number,
     scheduledDate: Date,
