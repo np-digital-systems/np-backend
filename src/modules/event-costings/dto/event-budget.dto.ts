@@ -55,7 +55,7 @@ export class ExpectedLineDto {
 }
 
 export class ExpectedAmountsDto {
-  @ApiProperty({ description: 'Whether these come from the day’s frozen budget' })
+  @ApiProperty({ description: 'Whether a costing in force covers this day' })
   costed!: boolean;
   @ApiProperty({ nullable: true, description: 'What the sponsor is asked for' })
   sponsorAmount!: number | null;
