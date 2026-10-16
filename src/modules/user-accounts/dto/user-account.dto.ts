@@ -35,10 +35,7 @@ export class UserAccountDto {
   @ApiProperty() createdAt!: Date;
 }
 
-/**
- * A sign-in is granted to a party that already exists. Where it does not, pass
- * the name instead and the register gains a row before the account does.
- */
+// Pass an existing partyId, or a name to create the party first.
 export class CreateUserAccountDto {
   @ApiPropertyOptional({ description: 'An existing party. Omit to register a new person' })
   @IsOptional()
