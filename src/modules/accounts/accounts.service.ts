@@ -14,7 +14,6 @@ import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { LedgerQueryService, Sides } from '../ledger/ledger-query.service';
 import {
-  AccountDto,
   AccountRecordDto,
   AccountRefDto,
   CreateAccountDto,
@@ -263,5 +262,3 @@ export class AccountsService {
     };
   }
 }
-
-export type { AccountDto };
