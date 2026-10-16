@@ -2,12 +2,7 @@ export type EventStatus = 'Completed' | 'Today' | 'Pending Approval' | 'Schedule
 
 const isoDate = (value: Date): string => value.toISOString().slice(0, 10);
 
-/**
- * An event's status is read off the calendar, never stored.
- *
- * Two facts decide it: whether somebody marked it done, and where its date sits
- * relative to today. Nothing else can drift out of step with the calendar.
- */
+// Derived from completion and the date, never stored.
 export function deriveEventStatus(
   scheduledDate: Date,
   isCompleted: boolean,
@@ -24,7 +19,7 @@ export function deriveEventStatus(
   return 'Scheduled';
 }
 
-/** A past occurrence nobody marked done — the one thing the calendar should nag about. */
+// A past occurrence not marked done.
 export function isOverdue(
   scheduledDate: Date,
   isCompleted: boolean,
