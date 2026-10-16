@@ -8,13 +8,7 @@ export function money(value: string | number | Prisma.Decimal): Money {
   return new Prisma.Decimal(value);
 }
 
-/**
- * Rupees as a JSON number, rounded to the paisa.
- *
- * Arithmetic stays in `numeric` in Postgres and in `Decimal` here; this is the
- * boundary where it becomes a number for the client, and the only place a
- * rounding decision is made.
- */
+// The only rounding point: Decimal arithmetic becomes a JSON number (2 dp) here, at the response boundary.
 export function toRupees(value: Prisma.Decimal | number | null | undefined): number {
   if (value === null || value === undefined) return 0;
 
@@ -25,7 +19,7 @@ export function toRupeesOrNull(value: Prisma.Decimal | null | undefined): number
   return value === null || value === undefined ? null : toRupees(value);
 }
 
-/** Share of a total, as a percentage rounded to one decimal. Zero total gives zero. */
+/** Percentage to one decimal; a zero total gives zero. */
 export function share(part: Prisma.Decimal | number, total: Prisma.Decimal | number): number {
   const whole = toRupees(total);
 
