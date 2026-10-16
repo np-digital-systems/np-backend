@@ -28,8 +28,7 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestFastifyApplication>(AppModule, adapter, {
     bufferLogs: true,
     rawBody: false,
-    // The JSON parser is registered below instead, so an action route that
-    // takes no body is not told its empty body is malformed.
+    // Custom JSON parser below accepts an empty body on action routes.
     bodyParser: false,
   });
 
