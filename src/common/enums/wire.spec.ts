@@ -22,10 +22,7 @@ import {
   VoucherStatusWire,
 } from './wire';
 
-/**
- * The values the frontend switches on, read out of its own type declarations.
- * If the database and these ever part company, this suite is what says so.
- */
+// Values the frontend switches on; this suite fails if the database enums drift from them.
 const CONTRACT = {
   ProjectStatus: ['planning', 'active', 'on-hold', 'completed'],
   BankAccountType: ['current', 'savings', 'fixed-deposit'],
