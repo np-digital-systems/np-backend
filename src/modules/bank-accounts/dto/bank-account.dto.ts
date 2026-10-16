@@ -23,7 +23,7 @@ export class BankAccountRefDto {
   @ApiProperty() isActive!: boolean;
 }
 
-export class BankAccountDto extends BankAccountRefDto {
+class BankAccountDto extends BankAccountRefDto {
   @ApiProperty() bankName!: string;
   @ApiProperty() branch!: string;
   @ApiProperty({

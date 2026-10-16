@@ -92,10 +92,7 @@ describe('resolveCosting', () => {
     expect(resolveCosting([costing({ id: 1 })], 3, on('2020-01-01'))).toBeNull();
   });
 
-  /*
-   * The case this was written for: a festival kept in August, costed in
-   * September. The first version has no start, so it reaches the day anyway.
-   */
+  // A festival held in August but costed in September: the first version has no start, so it still applies.
   it('prices a day that passed before the costing was written', () => {
     const written = costing({ id: 1, slotId: 11, effectiveFrom: null });
 
@@ -135,8 +132,7 @@ describe('resolveCosting, on drafts', () => {
 
   it('ignores a draft written for the slot over an applied type-wide version', () => {
     const typeWide = costing({ id: 1, slotId: null });
-    // Specificity would hand it the day, so this is the case that proves the
-    // draft is filtered before specificity is considered rather than after.
+    // Proves drafts are filtered before slot specificity is considered.
     const slotDraft = costing({ id: 2, slotId: 7, isApplied: false });
 
     expect(resolveCosting([typeWide, slotDraft], 7, on('2026-09-21'))?.id).toBe(1);

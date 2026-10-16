@@ -191,13 +191,7 @@ export class QueryEventsDto {
   unsponsoredOnly?: boolean;
 }
 
-/**
- * Someone who could be asked to give to this observance.
- *
- * "Contributor" is never stored: it is computed from what people actually gave
- * in earlier years, which is what makes the collection sheet open with last
- * year's names already on it.
- */
+// Computed from past gifts, never stored.
 export class ContributorDto {
   @ApiProperty() partyId!: number;
   @ApiProperty() name!: string;

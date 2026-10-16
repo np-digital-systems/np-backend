@@ -8,13 +8,7 @@ export interface AssetMaths {
   netBookValue: number;
 }
 
-/**
- * Straight-line depreciation, floored at zero.
- *
- * A rate of zero means the item does not depreciate — land, and the gold and
- * silver articles a temple carries at cost. Depreciation stops at the disposal
- * date, and an asset can never be written below nothing.
- */
+// Straight-line, floored at zero. A zero rate means no depreciation (land, gold, silver); stops at disposal.
 export function assetMaths(
   cost: number,
   annualRatePercent: number,

@@ -20,7 +20,7 @@ import { TokenService } from './token.service';
 
 export const ARGON_OPTIONS = { memoryCost: 19_456, timeCost: 2, parallelism: 1 } as const;
 
-/** The name lives on the party, so every identity read hops through it. */
+// Names live on the party, so identity reads include it.
 const IDENTITY_SELECT = {
   id: true,
   email: true,
@@ -51,7 +51,6 @@ export class AuthService {
     return hash(password, ARGON_OPTIONS);
   }
 
-  /** The signed-in identity, for GET /auth/me. */
   async identityOrFail(id: string): Promise<Omit<AuthUserDto, 'permissions'>> {
     const account = await this.prisma.userAccount.findUnique({
       where: { id },

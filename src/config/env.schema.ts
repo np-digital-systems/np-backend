@@ -2,19 +2,12 @@ import { z } from 'zod';
 
 const duration = z.string().regex(/^\d+(ms|s|m|h|d)$/);
 
-/*
- * Said in full because of where it gets read.
- *
- * A signing secret is usually wrong for one of two reasons: the deployment
- * still carries the placeholder from .env.render.example, or someone typed a
- * short word. Either way the message arrives in a deploy log, far from the
- * documentation, so it names the fix rather than only the rule.
- */
+// Detailed because it's read in deploy logs: usually a leftover placeholder or a too-short secret.
 const SECRET_TOO_SHORT =
   'must be at least 32 characters — generate one with `openssl rand -hex 32`. ' +
   'A placeholder such as REPLACE_ME will not do.';
 
-export const envSchema = z.object({
+const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().min(1).max(65535).default(4000),
   HOST: z.string().min(1).default('0.0.0.0'),

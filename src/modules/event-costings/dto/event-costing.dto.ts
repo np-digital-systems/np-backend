@@ -18,7 +18,6 @@ import {
 import { CostingStatus } from '../../../generated/prisma/enums';
 import { AccountRefDto } from '../../accounts/dto/account.dto';
 
-/** One item under a heading — what the quote shows a family. */
 export class CostingItemDto {
   @ApiProperty() id!: number;
   @ApiProperty() lineNo!: number;
@@ -26,7 +25,6 @@ export class CostingItemDto {
   @ApiProperty({ description: 'What this part of the head comes to' }) amount!: number;
 }
 
-/** One heading — the level that reaches the ledger. */
 export class CostingLineDto {
   @ApiProperty() id!: number;
   @ApiProperty() lineNo!: number;
@@ -124,14 +122,7 @@ export class WriteCostingItemDto {
   amount!: number;
 }
 
-/**
- * One expected cost as it is written.
- *
- * There is no fund and no activity here: both come from the pooja type's own
- * activity, which already answers them for every receipt the temple raises.
- * Asking again would be a second place for the same fact to be kept, and the
- * two would eventually disagree.
- */
+// No fund or activity: both come from the pooja type's activity.
 export class WriteCostingLineDto {
   @ApiProperty({ description: 'The expense head this lands on' })
   @Type(() => Number)
@@ -207,12 +198,7 @@ export class CreateCostingDto {
   @MaxLength(2000)
   notes?: string | null;
 
-  /*
-   * A costing may be saved with nothing in it. The lines are written on the
-   * editor that opens next, and demanding one here only to satisfy a rule of
-   * the API's own making is what put a single expense line on a dialog whose
-   * other five lived somewhere else.
-   */
+  // May be empty: lines are added in the editor afterwards.
   @ApiPropertyOptional({ type: () => [WriteCostingLineDto] })
   @IsOptional()
   @IsArray()
@@ -222,17 +208,7 @@ export class CreateCostingDto {
   lines?: WriteCostingLineDto[];
 }
 
-/**
- * A revision rewrites the figures, never the scope.
- *
- * Moving a costing from one slot to another would silently reprice every
- * occurrence already dated against both, so the scope is fixed at creation and
- * a costing for a different slot is a different costing.
- *
- * The quote is not here either. It is the lines charged to the sponsor, added
- * up, and a figure that can be typed as well as calculated is a figure with two
- * answers.
- */
+// Scope is fixed at creation (moving it would reprice dated occurrences); the quote is derived from the lines.
 export class UpdateCostingDto {
   @ApiPropertyOptional()
   @IsOptional()
@@ -252,7 +228,6 @@ export class UpdateCostingDto {
   lines?: WriteCostingLineDto[];
 }
 
-/** Day 2 of a festival is day 1 with three figures changed. */
 export class CopyCostingDto {
   @ApiPropertyOptional({
     description: 'The slot to copy onto; leave empty to cover the whole type',
@@ -313,7 +288,6 @@ export class ResolveCostingDto {
   on!: string;
 }
 
-/** The one-line answer a calendar screen needs before it offers to cost a day. */
 export class CostingSummaryDto {
   @ApiProperty({ nullable: true }) costingId!: number | null;
   @ApiProperty({ nullable: true }) sponsorAmount!: number | null;

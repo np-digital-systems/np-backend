@@ -40,7 +40,6 @@ export class EventTypeRecordDto extends EventTypeDto {
   scheduledCount!: number;
 }
 
-/** One slot of a type, with the arrangement standing against it. */
 export class EventSlotDto {
   @ApiProperty() id!: number;
   @ApiProperty() instanceIdentifier!: number;

@@ -20,7 +20,7 @@ const EVENT_INCLUDE = {
 
 type EventRow = Prisma.EventGetPayload<{ include: typeof EVENT_INCLUDE }>;
 
-/** Statuses whose vouchers still stand — a cancelled one settles nothing. */
+// Cancelled vouchers settle nothing.
 const STANDING: VoucherStatus[] = [
   VoucherStatus.Draft,
   VoucherStatus.PendingApproval,
@@ -35,15 +35,6 @@ export class EventBudgetsService {
     private readonly costings: EventCostingsService,
   ) {}
 
-  /**
-   * What this occurrence is expected to cost, for a voucher form to fill from.
-   *
-   * The frozen budget wins where there is one: a day already quoted is owed the
-   * figure it was quoted at, whatever the rate has since become. Where the day
-   * has not been costed, the costing in force on its date answers instead, so a
-   * cashier receipting a Friday nobody costed still gets today's rate rather
-   * than an empty box.
-   */
   async expected(eventId: number): Promise<ExpectedAmountsDto> {
     const event = await this.load(eventId);
 
@@ -56,8 +47,7 @@ export class EventBudgetsService {
     if (!costing) return { costed: false, sponsorAmount: null, lines: [] };
 
     return {
-      // Resolved, never frozen: the version in force on the day's own date is
-      // the one that priced it, and the date ranges keep that true for ever.
+      // Resolved from the version in force on the day's date; date ranges keep that stable.
       costed: true,
       sponsorAmount: toRupees(costing.sponsorAmount),
       lines: costing.lines
@@ -70,15 +60,6 @@ export class EventBudgetsService {
     };
   }
 
-  /**
-   * What the day is expected to cost, measured against what it actually cost.
-   *
-   * The expectation is resolved from the version in force on the day's own
-   * date, not copied onto the day beforehand. The date ranges already make that
-   * answer permanent: a pooja held in 2026 resolves to the 2026 version however
-   * many times the rate is revised afterwards, so there is nothing a frozen
-   * copy would have protected that this does not.
-   */
   async find(eventId: number): Promise<EventBudgetDto> {
     const event = await this.load(eventId);
 
@@ -142,7 +123,7 @@ export class EventBudgetsService {
     return event;
   }
 
-  /** What the books say the day cost under each head, from posted entries only. */
+  // Posted ledger entries only.
   private async actualsByAccount(eventId: number): Promise<Map<number, number>> {
     const rows = await this.prisma.ledgerEntry.groupBy({
       by: ['accountId'],
@@ -158,13 +139,7 @@ export class EventBudgetsService {
     );
   }
 
-  /**
-   * Which heads already carry a voucher, cancelled ones passed over.
-   *
-   * Derived rather than stored. A column saying "paid" goes on saying it after
-   * the voucher behind it is cancelled, and a budget that lies about what has
-   * been settled is worse than one that says nothing.
-   */
+  // Derived, not stored, so a cancelled voucher never leaves a line marked as paid.
   private async raisedAccounts(eventId: number): Promise<Map<number, BudgetLineStatus>> {
     const lines = await this.prisma.voucherLine.findMany({
       where: {

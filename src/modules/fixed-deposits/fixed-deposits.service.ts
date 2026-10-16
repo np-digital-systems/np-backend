@@ -149,12 +149,7 @@ export class FixedDepositsService {
     return this.findOneOrFail(id);
   }
 
-  /**
-   * Roll a matured deposit into a new certificate.
-   *
-   * The old row is marked `renewed` rather than edited, and the new one points
-   * back at it, so the chain of a deposit rolled over for years stays readable.
-   */
+  // The old row is marked renewed (not edited) and the new one links back, keeping the renewal chain.
   async renew(id: number, dto: RenewDepositDto, context: ActorContext): Promise<DepositRecordDto> {
     const previous = await this.prisma.fixedDeposit.findUnique({ where: { id } });
 

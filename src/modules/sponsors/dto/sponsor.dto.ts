@@ -5,13 +5,7 @@ import { IsEnum, IsInt, IsOptional, Max, Min, ValidateIf } from 'class-validator
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 import { FrequencyType, PartyKind } from '../../../generated/prisma/enums';
 
-/**
- * A sponsor, as the calendar needs one.
- *
- * A party rather than an account. Sponsorship is a dealing the temple has with
- * somebody; whether that somebody can also sign in is a separate question, and
- * for most of them the answer is no.
- */
+// A party, not a user account; most sponsors never sign in.
 export class SponsorPartyDto {
   @ApiProperty() id!: number;
   @ApiProperty({ description: 'Tamil name — the language the calendar is kept in' }) name!: string;

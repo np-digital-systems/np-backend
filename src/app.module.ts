@@ -39,16 +39,8 @@ import { VouchersModule } from './modules/vouchers/vouchers.module';
 import { SponsorsModule } from './modules/sponsors/sponsors.module';
 import { UserAccountsModule } from './modules/user-accounts/user-accounts.module';
 
-/**
- * Readable logs when someone is watching, plain JSON when nobody is.
- *
- * pino-pretty is a development dependency, so an image built with
- * `npm prune --omit=dev` does not carry it. Naming a transport that is not
- * installed takes the whole application down at boot — a steep price for log
- * formatting, and one paid at the worst moment, when a deployed instance is
- * starting with NODE_ENV set to something unexpected. So the target is only
- * named once it is known to resolve, and its absence costs nothing but colour.
- */
+// pino-pretty is a dev dependency missing from production images; a missing transport crashes boot,
+// so it's only used in development and when it actually resolves.
 function prettyTransport(
   nodeEnv: string,
 ): { target: string; options: Record<string, unknown> } | undefined {

@@ -35,8 +35,8 @@ export function toBankAccountRef(
   };
 }
 
-/** Last four digits only; enough to recognise the account, useless to misuse. */
-export function maskAccountNumber(accountNumber: string): string {
+// Only the last four digits are ever returned.
+function maskAccountNumber(accountNumber: string): string {
   const digits = accountNumber.replace(/\D/g, '');
 
   return digits.length <= 4 ? '••••' : `••••${digits.slice(-4)}`;
@@ -109,11 +109,7 @@ export class BankAccountsService {
 
     const openingBalance = dto.openingBalance ?? 0;
 
-    /*
-     * The opening position is recorded once, on the ledger head, and mirrored
-     * here for the certificate. Writing both in one transaction is what keeps
-     * the chart of accounts and the bank book from ever disagreeing.
-     */
+    // Opening balance lives on the ledger head and is mirrored here, in one transaction so they agree.
     const account = await this.prisma.$transaction(async (tx) => {
       if (openingBalance !== 0) {
         const entries = await tx.ledgerEntry.count({ where: { accountId: dto.ledgerAccountId } });

@@ -21,7 +21,6 @@ import {
 } from './dto/sponsor.dto';
 import { describeInstance } from './instance-label';
 
-/** Contact detail lives on the party; the sign-in, where there is one, is only an id. */
 const SPONSOR_SELECT = {
   id: true,
   nameTa: true,
@@ -42,7 +41,6 @@ const ASSIGNMENT_INCLUDE = {
 
 type AssignmentRow = Prisma.EventTypeSponsorGetPayload<{ include: typeof ASSIGNMENT_INCLUDE }>;
 
-/** Dated occurrences this year, per slot. Every sponsor holds one. */
 type OccurrenceCounts = Map<number, number>;
 
 const NO_OCCURRENCES: OccurrenceCounts = new Map();
@@ -54,14 +52,7 @@ export class EventSponsorsService {
     private readonly audit: AuditService,
   ) {}
 
-  /**
-   * Everyone who could be registered as a sponsor.
-   *
-   * Unfiltered by role on purpose. A florist the temple has only ever bought
-   * flowers from may sponsor a pooja next Friday, and should be findable
-   * without being re-registered as a second party — the act of registering
-   * them grants the role.
-   */
+  // Not filtered by role: any party can become a sponsor without being registered twice.
   async directory(
     query: QueryDirectoryDto,
     canSeeContact: boolean,
@@ -94,7 +85,6 @@ export class EventSponsorsService {
     );
   }
 
-  /** Sponsors registered against an event type, in slot order. */
   async findMany(query: QuerySponsorsDto, canSeeContact: boolean): Promise<SponsorAssignmentDto[]> {
     const year = query.year ?? new Date().getFullYear();
 
@@ -136,8 +126,7 @@ export class EventSponsorsService {
     await this.assertNotDuplicate(slotId, dto.partyId);
 
     const created = await this.prisma.$transaction(async (tx) => {
-      // Sponsoring something is what makes a party a sponsor, so the profile is
-      // opened here rather than demanded beforehand.
+      // Sponsoring creates the sponsor profile if needed.
       await this.ensureSponsorProfile(tx, dto.partyId);
 
       return tx.eventTypeSponsor.create({
@@ -220,14 +209,7 @@ export class EventSponsorsService {
     });
   }
 
-  /**
-   * The slot a sponsorship attaches to, if it has been given one yet.
-   *
-   * Naming no instance is a placement in its own right — the sponsor joins the
-   * pool for the type and is given a slot later — so it is answered with null
-   * rather than refused. Naming one the type never declared is still refused,
-   * by lookup rather than by an arithmetic check that could drift from it.
-   */
+  // No instance is valid (null, assigned later); an undeclared instance is rejected by lookup.
   private async resolveSlotId(
     eventTypeId: number,
     instanceIdentifier: number | null | undefined,
@@ -242,11 +224,7 @@ export class EventSponsorsService {
       );
     }
 
-    /*
-     * A sponsor now always holds a slot, so a registration that names no
-     * instance is placed on the type's first one. That is a placeholder, not a
-     * decision — the temple moves them once it settles which Friday they take.
-     */
+    // Without an instance, place on the type's first slot as a placeholder until assigned.
     const instance = instanceIdentifier ?? 1;
 
     const slot = await this.prisma.eventSlot.findUnique({
@@ -263,10 +241,7 @@ export class EventSponsorsService {
     return slot.id;
   }
 
-  /**
-   * Checked here as well as by `one_sponsor_per_slot`, so the clash comes back
-   * naming the person and the slot rather than as a constraint violation.
-   */
+  // Duplicates the `one_sponsor_per_slot` constraint to give a readable error.
   private async assertNotDuplicate(
     slotId: number,
     partyId: number,
@@ -284,7 +259,7 @@ export class EventSponsorsService {
     }
   }
 
-  /** A sponsor profile is the sponsor role; opening one is idempotent. */
+  // Idempotent.
   private async ensureSponsorProfile(tx: Prisma.TransactionClient, partyId: number): Promise<void> {
     await tx.sponsor.upsert({
       where: { partyId },
@@ -307,7 +282,6 @@ export class EventSponsorsService {
     }
   }
 
-  /** How many dated occurrences each sponsor's slot keeps this year. */
   private async countOccurrences(
     assignments: { slotId: number }[],
     year: number,
