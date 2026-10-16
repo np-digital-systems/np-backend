@@ -37,10 +37,7 @@ export class CreateFinancialYearDto {
   @IsDateString()
   endsOn!: string;
 
-  /*
-   * No openingBalance here on purpose. It is summed from the opening balances
-   * on the cash and bank heads, so there is nothing for the caller to supply.
-   */
+  // No openingBalance: it's derived from the cash and bank heads.
 }
 
 export class QueryFinancialYearsDto {

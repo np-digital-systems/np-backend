@@ -55,7 +55,7 @@ export class FinancialYearsService {
     return this.toDto(year);
   }
 
-  /** The year a voucher dated `date` belongs to. Refuses a closed year. */
+  /** Refuses a closed year. */
   async resolveOpenYear(date: Date): Promise<YearRow> {
     const year = await this.prisma.financialYear.findFirst({
       where: { startsOn: { lte: date }, endsOn: { gte: date } },
@@ -87,8 +87,7 @@ export class FinancialYearsService {
         label: dto.label,
         startsOn,
         endsOn,
-        // Not taken from the request: the opening position is read from the
-        // chart of accounts while the year runs, and frozen here on close.
+        // Read from the chart of accounts while open; frozen on close.
         status: FinancialYearStatus.upcoming,
       },
     });
@@ -133,12 +132,7 @@ export class FinancialYearsService {
     return this.toDto(opened);
   }
 
-  /**
-   * Close a year by freezing its totals into the row.
-   *
-   * The figures become a snapshot rather than a live aggregate, so a later
-   * correction cannot silently rewrite a statement that has been published.
-   */
+  // Freezes totals into the row so later corrections can't rewrite a published statement.
   async close(id: number, context: ActorContext): Promise<FinancialYearDto> {
     const year = await this.prisma.financialYear.findUnique({ where: { id } });
 
@@ -192,16 +186,8 @@ export class FinancialYearsService {
     return this.toDto(closed);
   }
 
-  /**
-   * The money the year starts with: the opening on the cash head plus the
-   * opening on every bank account's ledger head.
-   *
-   * Derived rather than typed in when the year is created, because a figure
-   * entered by hand can drift from the chart of accounts the books are read
-   * from — and then two screens disagree about the same money. The heads are
-   * gathered exactly as the dashboard gathers them, so the year's opening and
-   * the cash and bank tiles cannot tell different stories.
-   */
+  // Cash head opening plus every bank account head's opening, derived (not entered) and gathered the
+  // same way as the dashboard so the figures agree.
   private async openingPosition(): Promise<number> {
     const [bankAccounts, { cashAccountId }] = await Promise.all([
       this.prisma.bankAccount.findMany({ select: { ledgerAccountId: true } }),
@@ -275,8 +261,7 @@ export class FinancialYearsService {
         }
       : await this.liveTotals(year);
 
-    // The opening follows the same rule as the totals beside it: a live read
-    // of the chart of accounts while the year runs, the snapshot once closed.
+    // Live while open, snapshot once closed (same as the totals).
     const openingBalance = frozen ? toRupees(year.openingBalance) : await this.openingPosition();
 
     const surplus =
