@@ -23,7 +23,7 @@ export class ProjectRefDto {
   @ApiProperty() isActive!: boolean;
 }
 
-export class ProjectDto extends ProjectRefDto {
+class ProjectDto extends ProjectRefDto {
   @ApiProperty() nameTa!: string;
   @ApiProperty({ nullable: true }) budget!: number | null;
   @ApiProperty() startDate!: string;

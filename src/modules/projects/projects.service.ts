@@ -176,10 +176,7 @@ export class ProjectsService {
     return this.update(id, { status: 'completed', isActive: false }, context);
   }
 
-  /**
-   * Work that is on hold or completed stops taking entries but keeps its history,
-   * so `isActive` follows `status` unless the caller says otherwise.
-   */
+  // On hold or completed projects stop taking entries, so isActive follows status unless set explicitly.
   private activityFor(status: ProjectStatus | undefined): boolean | undefined {
     if (status === undefined) return undefined;
 

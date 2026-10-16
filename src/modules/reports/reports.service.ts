@@ -29,24 +29,11 @@ export class ReportsService {
     private readonly settings: SettingsService,
   ) {}
 
-  /**
-   * The trial balance.
-   *
-   * Every account's net position on its natural side. Because it is summed from
-   * the same double entries the books are made of, the two totals agree unless
-   * something has gone badly wrong — which is precisely what it is for.
-   */
   async trialBalance(financialYearId?: number): Promise<TrialBalanceDto> {
     const yearId = await this.resolveYear(financialYearId);
     const sides = await this.ledger.byAccount(yearId);
 
-    /*
-     * A head belongs here if it moved during the year or if it started the year
-     * somewhere. Listing only what moved would let the two totals agree on
-     * movement alone while every balance on the report was wrong, and would
-     * hide an opening position that does not itself balance — which is the one
-     * error a trial balance exists to catch.
-     */
+    // Include heads with an opening balance too, or an unbalanced opening position would go unnoticed.
     const accounts = await this.prisma.account.findMany({
       where: {
         OR: [{ id: { in: [...sides.keys()] } }, { openingBalance: { not: 0 } }],
@@ -60,8 +47,7 @@ export class ReportsService {
     const rows = accounts.map((account) => {
       const totals = sides.get(account.id) ?? LedgerQueryService.empty();
 
-      // An opening is held on the head's own natural side, while the columns
-      // below are debit-positive, so a credit-natured opening enters negative.
+      // Openings are stored on the natural side; columns are debit-positive, so credit openings go negative.
       const opening = toRupees(account.openingBalance);
       const signedOpening = isDebitNatured(account.type) ? opening : -opening;
 
@@ -143,8 +129,7 @@ export class ReportsService {
       this.settings.accounting().then((settings) => settings.cashAccountId),
     ]);
 
-    // Opening positions come from the ledger heads, the same place the chart of
-    // accounts and the books read them, so no two screens can disagree.
+    // Openings come from the ledger heads, like every other report.
     const heads = await this.prisma.account.findMany({
       where: {
         id: {
