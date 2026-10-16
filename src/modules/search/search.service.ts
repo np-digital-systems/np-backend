@@ -11,12 +11,7 @@ import { QuerySearchDto, SearchResultDto } from './dto/search.dto';
 
 const contains = (search: string) => ({ contains: search, mode: 'insensitive' as const });
 
-/**
- * Global search across the portal.
- *
- * Each source is gated by the permission that guards its own screen, so search
- * can never become a side door onto records the caller cannot otherwise open.
- */
+// Each source is gated by its screen's permission, so search can't expose records the caller can't open.
 @Injectable()
 export class SearchService {
   constructor(

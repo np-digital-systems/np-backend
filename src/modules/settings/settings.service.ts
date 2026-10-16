@@ -102,13 +102,7 @@ export class SettingsService {
     if (!account.isPostable) throw new BadRequestException('The cash head must accept entries');
   }
 
-  /**
-   * Checked here rather than when a subscription is taken.
-   *
-   * A head that cannot carry the entry is a mistake made once, in settings, by
-   * somebody who can still see the picker they made it in. Discovering it at
-   * the counter instead means telling a member holding cash to come back later.
-   */
+  // Validated when saving settings, not at the counter when money is being taken.
   private async assertIsSanththaHead(accountId: number): Promise<void> {
     const account = await this.prisma.account.findUnique({ where: { id: accountId } });
 
