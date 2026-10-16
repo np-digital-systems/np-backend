@@ -1,22 +1,16 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 
 import { money, toRupees } from '../../common/money/money';
-import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
 import { AccountType, VoucherKind, VoucherStatus } from '../../generated/prisma/enums';
-import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { toAccountRef } from '../accounts/accounts.service';
-import { describeInstance } from '../sponsors/instance-label';
-import { VouchersService } from '../vouchers/vouchers.service';
-import { VoucherRecordDto } from '../vouchers/dto/voucher.dto';
 import { EventCostingsService, type CostingRow } from './event-costings.service';
 import {
   BudgetLineDto,
   BudgetLineStatus,
   EventBudgetDto,
   ExpectedAmountsDto,
-  RaisePaymentDto,
 } from './dto/event-budget.dto';
 
 const EVENT_INCLUDE = {
@@ -26,9 +20,7 @@ const EVENT_INCLUDE = {
 
 type EventRow = Prisma.EventGetPayload<{ include: typeof EVENT_INCLUDE }>;
 
-const isoDate = (value: Date): string => value.toISOString().slice(0, 10);
-
-/** Statuses whose vouchers still stand — a cancelled one settles nothing. */
+// Cancelled vouchers settle nothing.
 const STANDING: VoucherStatus[] = [
   VoucherStatus.Draft,
   VoucherStatus.PendingApproval,
@@ -41,19 +33,8 @@ export class EventBudgetsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly costings: EventCostingsService,
-    private readonly vouchers: VouchersService,
-    private readonly audit: AuditService,
   ) {}
 
-  /**
-   * What this occurrence is expected to cost, for a voucher form to fill from.
-   *
-   * The frozen budget wins where there is one: a day already quoted is owed the
-   * figure it was quoted at, whatever the rate has since become. Where the day
-   * has not been costed, the costing in force on its date answers instead, so a
-   * cashier receipting a Friday nobody costed still gets today's rate rather
-   * than an empty box.
-   */
   async expected(eventId: number): Promise<ExpectedAmountsDto> {
     const event = await this.load(eventId);
 
@@ -66,8 +47,7 @@ export class EventBudgetsService {
     if (!costing) return { costed: false, sponsorAmount: null, lines: [] };
 
     return {
-      // Resolved, never frozen: the version in force on the day's own date is
-      // the one that priced it, and the date ranges keep that true for ever.
+      // Resolved from the version in force on the day's date; date ranges keep that stable.
       costed: true,
       sponsorAmount: toRupees(costing.sponsorAmount),
       lines: costing.lines
@@ -80,15 +60,6 @@ export class EventBudgetsService {
     };
   }
 
-  /**
-   * What the day is expected to cost, measured against what it actually cost.
-   *
-   * The expectation is resolved from the version in force on the day's own
-   * date, not copied onto the day beforehand. The date ranges already make that
-   * answer permanent: a pooja held in 2026 resolves to the 2026 version however
-   * many times the rate is revised afterwards, so there is nothing a frozen
-   * copy would have protected that this does not.
-   */
   async find(eventId: number): Promise<EventBudgetDto> {
     const event = await this.load(eventId);
 
@@ -144,129 +115,6 @@ export class EventBudgetsService {
     };
   }
 
-  /**
-   * A payment voucher settling budget lines, filled in from them.
-   *
-   * One voucher per payee, because a voucher names one party and one total.
-   * Paying the goods shop and the melam group on one document would leave the
-   * books unable to say what either of them was actually given.
-   */
-  async raisePayment(
-    eventId: number,
-    dto: RaisePaymentDto,
-    context: ActorContext,
-  ): Promise<VoucherRecordDto> {
-    const event = await this.load(eventId);
-
-    const costing = await this.costings.applicableTo(
-      event.slot.eventTypeId,
-      event.slotId,
-      event.scheduledDate,
-    );
-
-    if (!costing) {
-      const summary = await this.costings.resolve(event.slotId, event.scheduledDate);
-
-      throw new BadRequestException(summary.problem ?? 'No costing covers that day');
-    }
-
-    const chosen = this.chosenLines(costing, dto);
-
-    const payee = await this.resolvePayee(chosen, dto);
-
-    const voucher = await this.vouchers.create(
-      {
-        kind: VoucherKind.payment,
-        date: dto.date ?? isoDate(new Date()),
-        description: `${this.describe(event)} — ${chosen
-          .map((line) => line.label ?? line.account.nameTa)
-          .join(', ')}`,
-        mode: dto.mode,
-        bankAccountId: dto.bankAccountId ?? undefined,
-        chequeNo: dto.chequeNo ?? undefined,
-        manualVoucherNo: dto.manualVoucherNo,
-        partyId: payee.partyId ?? undefined,
-        party: payee.name,
-        lines: chosen.map((line) => ({
-          accountId: line.accountId,
-          amount:
-            dto.lines.find((chosenLine) => chosenLine.budgetLineId === line.id)?.amount ??
-            toRupees(line.amount),
-          fundId: line.fundId,
-          activityId: line.activityId ?? undefined,
-          eventId,
-        })),
-      },
-      context,
-    );
-
-    await this.audit.record(context, {
-      action: 'create',
-      entity: 'event',
-      entityRef: String(eventId),
-      summary: `Raised ${voucher.ref} to ${payee.name} against ${this.describe(event)}`,
-    });
-
-    return voucher;
-  }
-
-  // ── rules ─────────────────────────────────────────────────────────────────
-
-  private chosenLines(costing: CostingRow, dto: RaisePaymentDto): CostingRow['lines'] {
-    const wanted = new Set(dto.lines.map((line) => line.budgetLineId));
-
-    const chosen = costing.lines.filter(
-      (line) => line.parentLineId === null && wanted.has(line.id),
-    );
-
-    if (chosen.length !== wanted.size) {
-      throw new NotFoundException('Some of those lines are not on the costing for that day');
-    }
-
-    return chosen;
-  }
-
-  /**
-   * Every line on one voucher goes to one payee.
-   *
-   * The budget usually says who — the melam group, the electrician — and where
-   * it does not, the cashier names them. Where it says two different people,
-   * the answer is two vouchers, and saying so is more use than guessing.
-   */
-  private async resolvePayee(
-    lines: CostingRow['lines'],
-    dto: RaisePaymentDto,
-  ): Promise<{ partyId: number | null; name: string }> {
-    const named = [...new Set(lines.flatMap((line) => (line.partyId ? [line.partyId] : [])))];
-
-    if (named.length > 1) {
-      throw new BadRequestException(
-        'Those lines are payable to different people. Raise one voucher for each payee',
-      );
-    }
-
-    const partyId = dto.partyId ?? named[0] ?? null;
-
-    if (partyId === null) {
-      if (!dto.party) {
-        throw new BadRequestException(
-          'The budget does not say who is paid for this. Name the payee on the voucher',
-        );
-      }
-
-      return { partyId: null, name: dto.party };
-    }
-
-    const party = await this.prisma.party.findUnique({ where: { id: partyId } });
-
-    if (!party) throw new NotFoundException(`Party ${partyId} was not found`);
-    if (!party.isActive) throw new BadRequestException(`${party.nameTa} is no longer active`);
-
-    return { partyId, name: dto.party ?? party.nameTa };
-  }
-
-  // ── reading ───────────────────────────────────────────────────────────────
-
   private async load(id: number): Promise<EventRow> {
     const event = await this.prisma.event.findUnique({ where: { id }, include: EVENT_INCLUDE });
 
@@ -275,7 +123,7 @@ export class EventBudgetsService {
     return event;
   }
 
-  /** What the books say the day cost under each head, from posted entries only. */
+  // Posted ledger entries only.
   private async actualsByAccount(eventId: number): Promise<Map<number, number>> {
     const rows = await this.prisma.ledgerEntry.groupBy({
       by: ['accountId'],
@@ -291,13 +139,7 @@ export class EventBudgetsService {
     );
   }
 
-  /**
-   * Which heads already carry a voucher, cancelled ones passed over.
-   *
-   * Derived rather than stored. A column saying "paid" goes on saying it after
-   * the voucher behind it is cancelled, and a budget that lies about what has
-   * been settled is worse than one that says nothing.
-   */
+  // Derived, not stored, so a cancelled voucher never leaves a line marked as paid.
   private async raisedAccounts(eventId: number): Promise<Map<number, BudgetLineStatus>> {
     const lines = await this.prisma.voucherLine.findMany({
       where: {
@@ -355,15 +197,5 @@ export class EventBudgetsService {
       chargedToSponsor: line.chargedToSponsor,
       status: raised.get(line.accountId) ?? 'Not raised',
     };
-  }
-
-  private describe(event: EventRow): string {
-    const instance = describeInstance(
-      event.slot.eventType.frequencyType,
-      event.slot.instanceIdentifier,
-      event.slot.customInstanceName,
-    );
-
-    return `${event.slot.eventType.nameTa} — ${instance} — ${isoDate(event.scheduledDate)}`;
   }
 }

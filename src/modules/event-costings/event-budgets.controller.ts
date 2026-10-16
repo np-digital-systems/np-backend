@@ -1,11 +1,8 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Post } from '@nestjs/common';
+import { Controller, Get, Param, ParseIntPipe } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
-import { Actor } from '../../common/decorators/actor.decorator';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
-import type { ActorContext } from '../../common/types/authenticated-user';
-import { VoucherRecordDto } from '../vouchers/dto/voucher.dto';
-import { EventBudgetDto, ExpectedAmountsDto, RaisePaymentDto } from './dto/event-budget.dto';
+import { EventBudgetDto, ExpectedAmountsDto } from './dto/event-budget.dto';
 import { EventBudgetsService } from './event-budgets.service';
 
 @ApiTags('event-budgets')
@@ -28,16 +25,5 @@ export class EventBudgetsController {
   })
   expected(@Param('eventId', ParseIntPipe) eventId: number): Promise<ExpectedAmountsDto> {
     return this.budgets.expected(eventId);
-  }
-
-  @Post('vouchers/payment')
-  @RequirePermissions('payment-voucher:create')
-  @ApiOperation({ summary: 'A draft payment settling budget lines, one payee at a time' })
-  raisePayment(
-    @Param('eventId', ParseIntPipe) eventId: number,
-    @Body() dto: RaisePaymentDto,
-    @Actor() context: ActorContext,
-  ): Promise<VoucherRecordDto> {
-    return this.budgets.raisePayment(eventId, dto, context);
   }
 }
