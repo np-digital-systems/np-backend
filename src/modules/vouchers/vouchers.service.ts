@@ -42,14 +42,8 @@ const VOUCHER_INCLUDE = {
 
 type VoucherRow = Prisma.VoucherGetPayload<{ include: typeof VOUCHER_INCLUDE }>;
 
-/*
- * Which statuses a voucher may still be edited or cancelled in.
- *
- * An entry waiting on an approver is still editable: update() sends it back to
- * Draft and clears the submission, so a correction has to be resubmitted and
- * nobody can approve a version they never read. Approved and posted entries are
- * absent by design — those are corrected by a further entry, not a rewrite.
- */
+// Pending entries stay editable (update() returns them to Draft for re-approval); approved and
+// posted entries are corrected by a further entry, never rewritten.
 const EDITABLE: VoucherStatus[] = [
   VoucherStatus.Draft,
   VoucherStatus.PendingApproval,
@@ -78,8 +72,7 @@ export class VouchersService {
       kind: query.kind,
       status: VoucherStatusWire.toPrismaOptional(query.status),
       financialYearId: query.financialYearId,
-      // The coding lives on the lines, so a filter asks whether any line
-      // matches rather than reading a column the header no longer has.
+      // Coding lives on the lines, so match vouchers where any line matches.
       lines:
         query.fundId || query.accountId || query.projectId
           ? {
@@ -170,24 +163,11 @@ export class VouchersService {
     return this.toRecord(voucher);
   }
 
-  /**
-   * Raise a receipt on another module's behalf and put it in the queue.
-   *
-   * It stops at PendingApproval, like every other voucher. Nothing reaches the
-   * ledger because a clerk pressed a button on a register screen: a receipt
-   * raised this way is still somebody's entry, and the second pair of eyes is
-   * the control that catches the wrong member, the wrong year and the wrong
-   * amount before they are money the books have to be corrected out of.
-   *
-   * The caller supplies the coding, so this only spares them `create` and
-   * `submit` — reference allocation, coding validation and the approval rules
-   * stay in the one place they are defined for every other voucher.
-   */
+  // For other modules: create + submit, stopping at PendingApproval so the entry is still reviewed.
   async raiseForApproval(dto: CreateVoucherDto, context: ActorContext): Promise<VoucherRecordDto> {
     const created = await this.create(dto, context);
 
-    // Raised by this actor a moment ago, so there is no other author's entry
-    // to guard against here — `canSeeAll` is about acting on somebody else's.
+    // The actor just created it, so the canSeeAll check isn't needed.
     return this.submit(Number(created.id), context, true);
   }
 
@@ -207,11 +187,7 @@ export class VouchersService {
 
     await this.validateCoding(dto);
 
-    /*
-     * The lines are replaced rather than reconciled. A draft's coding is not a
-     * thing with a history — it is whatever the clerk last meant — and matching
-     * old rows to new would invent an identity the user never asked for.
-     */
+    // Lines are replaced, not reconciled; draft lines have no identity worth preserving.
     const voucher = await this.prisma.$transaction(async (tx) => {
       await tx.voucherLine.deleteMany({ where: { voucherId: BigInt(id) } });
 
@@ -356,13 +332,7 @@ export class VouchersService {
     return this.toRecord(updated);
   }
 
-  /**
-   * Write the ledger lines and freeze the row.
-   *
-   * Both legs and the status change happen in one transaction; the deferred
-   * `ledger_balanced` trigger checks the voucher balances at commit, so a
-   * half-written entry cannot reach the books.
-   */
+  // One transaction; the deferred `ledger_balanced` trigger rejects an unbalanced voucher at commit.
   async post(id: number, context: ActorContext): Promise<VoucherRecordDto> {
     const voucher = await this.load(id);
 
@@ -398,8 +368,7 @@ export class VouchersService {
           projectId: line.projectId,
           activityId: line.activityId,
           eventId: line.eventId,
-          // The party belongs to the document, so it rides every coding line
-          // and none of the contra. Both sides would net it to nil.
+          // Party on coding lines only; on both sides it would net to nil.
           partyId: line.isCoding ? voucher.partyId : null,
           debit: line.debit,
           credit: line.credit,
@@ -453,12 +422,7 @@ export class VouchersService {
     return this.toRecord(updated);
   }
 
-  /**
-   * Allocate the next reference for a year and kind.
-   *
-   * A single statement, so two cashiers raising a voucher at the same moment
-   * cannot be handed the same number.
-   */
+  // A single statement, so concurrent vouchers can't get the same reference.
   private async allocateRef(
     financialYearId: number,
     kind: VoucherKind,
@@ -477,7 +441,6 @@ export class VouchersService {
     return `${row.prefix}-${year}-${String(row.allocated).padStart(4, '0')}`;
   }
 
-  /** The rows a voucher's lines become, numbered in the order they were given. */
   private lineRows(lines: readonly WriteVoucherLineDto[]) {
     return lines.map((line, index) => ({
       lineNo: index + 1,
@@ -493,11 +456,7 @@ export class VouchersService {
   private async validateCoding(dto: CreateVoucherDto): Promise<void> {
     const expected = dto.kind === VoucherKind.receipt ? AccountType.income : AccountType.expense;
 
-    /*
-     * Every line is checked, not just the first. A split receipt is one
-     * document, so one bad head on line three has to stop the whole thing —
-     * a half-posted voucher is not something the books can describe.
-     */
+    // Every line is validated; one bad line rejects the whole voucher.
     for (const [index, line] of dto.lines.entries()) {
       const where = dto.lines.length > 1 ? ` on line ${index + 1}` : '';
       const account = await this.accounts.assertPostable(line.accountId);

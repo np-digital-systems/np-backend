@@ -28,12 +28,12 @@ import { BankAccountRefDto } from '../../bank-accounts/dto/bank-account.dto';
 import { FundRefDto } from '../../funds/dto/fund.dto';
 import { ProjectRefDto } from '../../projects/dto/project.dto';
 
-export class VoucherActorDto {
+class VoucherActorDto {
   @ApiProperty() id!: string;
   @ApiProperty() name!: string;
 }
 
-export class VoucherLineDto {
+class VoucherLineDto {
   @ApiProperty() id!: number;
   @ApiProperty({ description: 'Order on the document, from 1' }) lineNo!: number;
   @ApiProperty() accountId!: number;
@@ -49,13 +49,7 @@ export class VoucherLineDto {
   @ApiProperty({ type: ProjectRefDto, nullable: true }) project!: ProjectRefDto | null;
 }
 
-/**
- * One head a voucher is coded to.
- *
- * There is no side here: every line of a receipt credits income and every line
- * of a payment debits expenditure, which follows from the voucher's kind. The
- * contra against cash or bank is generated when the voucher is posted.
- */
+// No debit/credit side: it follows from the voucher kind. The cash/bank contra is generated on posting.
 export class WriteVoucherLineDto {
   @ApiProperty({ description: 'The income or expense head this line hits' })
   @Type(() => Number)
@@ -99,7 +93,7 @@ export class WriteVoucherLineDto {
   eventId?: number | null;
 }
 
-export class VoucherDto {
+class VoucherDto {
   @ApiProperty() id!: number;
   @ApiProperty({ example: 'RV-2026-0125' }) ref!: string;
   @ApiProperty({ enum: VoucherKind }) kind!: VoucherKind;
