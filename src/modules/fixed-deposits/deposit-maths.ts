@@ -8,13 +8,7 @@ export interface DepositMaths {
   daysToMaturity: number;
 }
 
-/**
- * Simple interest over the full term, and what has accrued so far.
- *
- * A temple deposit is quoted at a simple annual rate over a fixed tenure, so
- * this is deliberately not a compounding calculation. Accrual is pro-rated by
- * day and never runs past maturity.
- */
+// Simple (not compound) annual interest; accrual is pro-rated by day and capped at maturity.
 export function depositMaths(
   principal: number,
   annualRatePercent: number,
