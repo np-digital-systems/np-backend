@@ -16,7 +16,7 @@ import {
 
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 
-export const SUBSCRIPTION_MODES = ['cash', 'bank', 'online'] as const;
+const SUBSCRIPTION_MODES = ['cash', 'bank', 'online'] as const;
 export type SubscriptionMode = (typeof SUBSCRIPTION_MODES)[number];
 
 export class SanththaSponsorDto {
@@ -84,7 +84,7 @@ export class SanththaRateDto {
   @ApiProperty() setAt!: Date;
 }
 
-/** The rate is fixed for everyone and set once a year. */
+// One rate for everyone, set per year.
 export class SetRateDto {
   @ApiProperty({ minimum: 2000, maximum: 2100 })
   @Type(() => Number)
@@ -100,13 +100,7 @@ export class SetRateDto {
   amount!: number;
 }
 
-/**
- * Where a subscription will land, so the counter can say so before taking money.
- *
- * Answered from the configuration rather than from constants in the browser: a
- * screen that names a head it does not actually post to is worse than one that
- * names none, and this is the same lookup the write itself does.
- */
+// Uses the same lookup as the write, so the screen shows the real posting before money is taken.
 export class SanththaPostingDto {
   @ApiProperty({ description: 'Whether a subscription can be receipted at all yet' })
   configured!: boolean;
@@ -170,13 +164,7 @@ export class RecordPaymentDto {
   receiptVoucherId?: number;
 }
 
-/**
- * Correcting a subscription already taken.
- *
- * Only what a clerk can get wrong at the counter: how much, when, how, and the
- * number off the paper book. The member and the year are what identify the row
- * — changing those is not a correction but a different subscription.
- */
+// Member and year identify the row, so only amount, date, mode and voucher number can be corrected.
 export class UpdatePaymentDto {
   @ApiPropertyOptional()
   @IsOptional()

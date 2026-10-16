@@ -45,33 +45,20 @@ type PaymentRow = Prisma.SanththaPaymentGetPayload<{ include: typeof PAYMENT_INC
 
 const round = (value: number) => Math.round(value * 100) / 100;
 
-/** Statuses that mean the receipt was thrown away rather than merely unfinished. */
+// Discarded receipts, as opposed to unfinished ones.
 const VOIDED: VoucherStatus[] = [VoucherStatus.Rejected, VoucherStatus.Cancelled];
 
-/*
- * While a subscription may still be corrected in place.
- *
- * The same window a voucher may be edited in, and for the same reason: once an
- * approver has passed it, or it has reached the ledger, the entry is somebody
- * else's decision and a correction is a further entry rather than a rewrite.
- */
+// Same edit window as vouchers: once approved or posted, corrections need a further entry.
 const CORRECTABLE: VoucherStatus[] = [
   VoucherStatus.Draft,
   VoucherStatus.PendingApproval,
   VoucherStatus.Rejected,
 ];
 
-/** What the receipt for a year's subscription is called, in the temple's own words. */
 const describeSubscription = (year: number, sponsorNo: string): string =>
   `வருடாந்த சந்தா பணம் ${year} — ${sponsorNo}`;
 
-/**
- * The annual sanththa.
- *
- * Sponsors pay it, at an amount fixed for everyone and set once a year. The
- * rate is only the default a payment starts from: what was actually taken is
- * kept on the payment, so raising the rate never restates an earlier year.
- */
+// The rate is only a default; each payment stores its own amount, so rate changes never restate past years.
 @Injectable()
 export class SanththaService {
   constructor(
@@ -152,10 +139,7 @@ export class SanththaService {
     }));
   }
 
-  /*
-   * A year already collected against may still be corrected, but the payments
-   * already taken keep their own amounts. Only what the form offers changes.
-   */
+  // Payments already taken keep their amounts; only the default changes.
   async setRate(dto: SetRateDto, context: ActorContext): Promise<SanththaRateDto> {
     const rate = await this.prisma.sanththaRate.upsert({
       where: { year: dto.year },
@@ -221,15 +205,7 @@ export class SanththaService {
 
     const amount = dto.amount ?? (await this.rateForOrFail(dto.year));
 
-    /*
-     * Everything that can refuse this is checked before a voucher exists.
-     *
-     * The receipt and the register row are two writes that cannot be made one,
-     * so the order matters: an exempt sponsor, a duplicate year, a missing rate
-     * or an unusable head all raise here, while there is still nothing to undo.
-     * What is left after this point is a receipt waiting for approval, and the
-     * register row that says which subscription it answers.
-     */
+    // Validate everything before creating the voucher: the receipt and register row can't share a transaction.
     const receiptVoucherId =
       dto.receiptVoucherId ?? (await this.raiseReceipt(sponsor, dto, amount, context));
 
@@ -258,23 +234,7 @@ export class SanththaService {
     return this.toPayment(payment, true);
   }
 
-  /**
-   * The receipt a subscription becomes.
-   *
-   * Raised here rather than by the screen that called it. A browser deciding
-   * which head the temple's income lands on is a decision in the wrong place:
-   * it cannot be audited, it cannot be changed without a deploy, and it was
-   * carrying a hard-coded account id that had drifted out of the chart.
-   *
-   * It goes to the approval queue, not to the ledger. Taking the money and
-   * accounting for it are two acts by two people: the register records that a
-   * member paid, and an approver checks the entry before it becomes a figure
-   * anybody reports. Posting it here would have let one person put money in the
-   * books unreviewed, which is the control the queue exists to keep.
-   *
-   * The party is the sponsor themselves, so the receipt answers "who paid"
-   * from the register rather than from a name typed at the counter.
-   */
+  // Submitted for approval, not posted: collecting and accounting stay with two people. The party is the sponsor.
   private async raiseReceipt(
     sponsor: SponsorRow,
     dto: RecordPaymentDto,
@@ -311,19 +271,8 @@ export class SanththaService {
     return Number(voucher.id);
   }
 
-  /**
-   * Where a subscription is receipted, worked out rather than written down.
-   *
-   * Settings name one thing: the income head. Everything else follows it. The
-   * activity is the one that declares this head as its default — the same
-   * `activity carries the coding` link the voucher form uses — and the fund is
-   * that activity's. Naming the head twice, once in settings and once beside a
-   * fund id, is how the two drift apart.
-   *
-   * A head no activity claims is still usable, but only if it can be funded,
-   * and nothing here guesses a fund: an entry in the wrong fund is money moved
-   * between purposes the temple keeps deliberately separate.
-   */
+  // Settings name only the income head; activity and fund come from the activity that defaults to it.
+  // A fund is never guessed: posting to the wrong fund moves money between restricted purposes.
   private async resolveCoding(): Promise<{
     accountId: number;
     account: { code: string; nameTa: string };
@@ -357,9 +306,7 @@ export class SanththaService {
       );
     }
 
-    // Exactly one, or none. Two activities pointing at the same head is a
-    // question only the temple can answer, and picking one would answer it
-    // silently in every receipt from here on.
+    // Exactly one or none: with two activities on the same head, picking one would be a silent guess.
     const activity =
       account.defaultForActivities.length === 1 ? account.defaultForActivities[0] : null;
 
@@ -373,7 +320,6 @@ export class SanththaService {
     };
   }
 
-  /** The same lookup the write does, for a screen that has to say where money lands. */
   async posting(): Promise<SanththaPostingDto> {
     const unconfigured = (problem: string): SanththaPostingDto => ({
       configured: false,
@@ -410,19 +356,7 @@ export class SanththaService {
       : `${activityName} is the sanththa activity but has no active default fund; set one so subscriptions know which fund they belong to.`;
   }
 
-  /**
-   * Correct a subscription already taken, receipt and all.
-   *
-   * Only while the receipt is still somebody's draft. Once an approver has
-   * passed it — and certainly once it is in the ledger — the figure has been
-   * relied on, and the way to fix it is a further entry that says so, not a
-   * rewrite that leaves no trace of what was approved.
-   *
-   * The receipt is edited through VouchersService, which returns it to Draft
-   * and clears the earlier submission on purpose: a corrected entry has to be
-   * approved again, so nobody can approve a version they never read. It is
-   * resubmitted here so it lands back in the queue rather than stalling.
-   */
+  // Only before approval. Editing returns the receipt to Draft so it's re-approved; it's resubmitted here.
   async update(
     id: number,
     dto: UpdatePaymentDto,
@@ -446,12 +380,7 @@ export class SanththaService {
     const amount = dto.amount ?? toRupees(before.amount);
     const paidOn = dto.paidOn ?? before.paidOn.toISOString().slice(0, 10);
     const mode = dto.mode ?? (before.mode as SubscriptionMode);
-    /*
-     * Kept unless a new one is given, and it cannot end up blank: the number is
-     * required on the voucher itself. A receipt raised before it was required
-     * has none to fall back on, so this asks for one rather than failing deeper
-     * down with a message about a voucher the clerk never mentioned.
-     */
+    // Older receipts may have no voucher number; ask for one here rather than fail deeper in VouchersService.
     const manualVoucherNo = dto.manualVoucherNo ?? receipt?.manualVoucherNo ?? '';
 
     if (receipt && manualVoucherNo.trim().length === 0) {
@@ -525,16 +454,7 @@ export class SanththaService {
     return toRupees(rate.amount);
   }
 
-  /**
-   * A subscription may be tied to one receipt, and it need not be posted yet.
-   *
-   * It used to have to be. That made sense while the register raised its own
-   * receipt and drove it to Posted in the same breath; now the receipt waits
-   * for an approver, so insisting on Posted here would reject the very rows
-   * this module creates. What a subscription must never point at is a receipt
-   * somebody threw away — a rejected or cancelled one is not evidence that
-   * money was taken.
-   */
+  // The receipt needn't be posted yet, but must not be rejected or cancelled (no evidence of payment).
   private async assertReceipt(receiptVoucherId: number): Promise<void> {
     const voucher = await this.prisma.voucher.findUnique({
       where: { id: BigInt(receiptVoucherId) },
@@ -581,8 +501,7 @@ export class SanththaService {
         ? VoucherStatusWire.toWire(payment.receiptVoucher.status)
         : null,
       manualVoucherNo: payment.receiptVoucher?.manualVoucherNo ?? null,
-      // No receipt at all leaves nothing to contradict, so the row itself is
-      // still correctable.
+      // No receipt means nothing to contradict, so the row stays editable.
       editable: payment.receiptVoucher ? CORRECTABLE.includes(payment.receiptVoucher.status) : true,
       mode: payment.mode as SubscriptionMode,
       collectedBy: payment.collectedBy,
