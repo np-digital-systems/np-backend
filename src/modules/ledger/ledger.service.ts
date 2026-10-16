@@ -45,20 +45,7 @@ export class LedgerService {
       this.prisma.ledgerEntry.findMany({
         where,
         include: ENTRY_INCLUDE,
-        /*
-         * Vouchers newest-first, but each one read in its own order: debit
-         * before credit, which is how a journal entry is written and read.
-         *
-         * `lineNo` already says this. `buildPostingLines` puts the money first
-         * for a receipt and the reason first for a payment, and both of those
-         * are the debit side, so line 1 is the debit either way. Sorting on
-         * `id` instead reversed the pair whenever the list ran newest-first,
-         * which showed the credit above the debit it answers.
-         *
-         * Only the grouping follows `query.order`. A voucher's internal order
-         * is not a direction to be flipped — it reads the same way whichever
-         * end of the ledger you start from.
-         */
+        // Only voucher order follows query.order; within a voucher, lineNo keeps debit before credit.
         orderBy: [{ date: query.order }, { voucherId: query.order }, { lineNo: 'asc' }],
         skip: query.skip,
         take: query.limit,
@@ -72,14 +59,12 @@ export class LedgerService {
     );
   }
 
-  /** The cash book: every posted movement through the configured cash head. */
   async cashBook(query: QueryBookDto): Promise<BookDto> {
     const cashAccountId = await this.settings.cashAccountId();
 
     return this.book({ accountId: cashAccountId }, query, await this.openingOf(cashAccountId));
   }
 
-  /** The bank book for one account: every posted movement through it. */
   async bankBook(query: QueryBookDto): Promise<BookDto> {
     if (!query.bankAccountId) {
       throw new BadRequestException('bankAccountId is required for the bank book');
@@ -94,13 +79,7 @@ export class LedgerService {
     );
   }
 
-  /**
-   * A book opens where its ledger head opens.
-   *
-   * The head is the one place an opening position is recorded, so the chart of
-   * accounts, the books and the balances on a bank account cannot report
-   * different figures for the same money.
-   */
+  // Opening balances live only on the ledger head, so every report agrees.
   private async openingOf(accountId: number): Promise<number> {
     const account = await this.prisma.account.findUnique({
       where: { id: accountId },
@@ -110,12 +89,7 @@ export class LedgerService {
     return toRupees(account?.openingBalance);
   }
 
-  /**
-   * A book is a filter over the ledger with a running balance.
-   *
-   * The opening figure is everything posted before the window, so paging
-   * through a date range never loses the balance that came before it.
-   */
+  // Opening figure is everything posted before the window, so date ranges keep the running balance.
   private async book(
     scope: Prisma.LedgerEntryWhereInput,
     query: QueryBookDto,
