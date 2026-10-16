@@ -105,12 +105,7 @@ export class NotificationsService {
     });
   }
 
-  /**
-   * Raise a notification and fan it out to its audience.
-   *
-   * Recipients are resolved at publication rather than at read time, so
-   * somebody who joins tomorrow does not inherit today's alerts.
-   */
+  // Recipients are resolved at publish time, so later users don't inherit old alerts.
   async publish(dto: CreateNotificationDto): Promise<NotificationDto> {
     const roles = (dto.roles?.length ? dto.roles : STAFF_ROLES) as AccountRole[];
 

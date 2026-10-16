@@ -24,12 +24,7 @@ function kindsOf(party: PartyRow): PartyKind[] {
   return KIND_ORDER.filter((kind) => party.roles.some((role) => role.kind === kind));
 }
 
-/**
- * Parties — the register of everyone the temple deals with, and the only place
- * a name is stored. People are never heads in the chart of accounts: one
- * `5200 Salaries` serves every kurukkal, and "what did we pay him" is a
- * grouping over this dimension.
- */
+// The only place names are stored. People are never chart-of-accounts heads; reports group by party.
 @Injectable()
 export class PartiesService {
   constructor(
@@ -136,8 +131,7 @@ export class PartiesService {
 
   private whereFrom(query: QueryPartiesDto): Prisma.PartyWhereInput {
     return {
-      // `some` rather than equality: a florist who also sponsors belongs in
-      // both lists, and is the same record in each.
+      // `some`: a party can hold several roles.
       roles: query.kind ? { some: { kind: query.kind } } : undefined,
       type: query.type,
       sponsor: query.sponsorsOnly ? { isNot: null } : undefined,
@@ -152,11 +146,7 @@ export class PartiesService {
     };
   }
 
-  /*
-   * Deactivating hides a party from the pickers; it never touches the entries
-   * that name it. What it must not do is leave a screen offering somebody who
-   * can no longer be chosen.
-   */
+  // Deactivating hides a party from pickers; existing entries are untouched.
   private async assertNothingDependsOnIt(party: PartyRow): Promise<void> {
     const [activities, accounts, standing, occurrences] = await Promise.all([
       this.prisma.activity.count({ where: { defaultPartyId: party.id } }),
