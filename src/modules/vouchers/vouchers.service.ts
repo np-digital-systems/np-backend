@@ -352,6 +352,7 @@ export class VouchersService {
         projectId: line.projectId,
         activityId: line.activityId,
         eventId: line.eventId,
+        fixedDepositId: line.fixedDepositId,
       })),
       contraAccountId,
       bankAccountId: voucher.bankAccountId,
@@ -368,6 +369,7 @@ export class VouchersService {
           projectId: line.projectId,
           activityId: line.activityId,
           eventId: line.eventId,
+          fixedDepositId: line.fixedDepositId,
           // Party on coding lines only; on both sides it would net to nil.
           partyId: line.isCoding ? voucher.partyId : null,
           debit: line.debit,
@@ -450,6 +452,7 @@ export class VouchersService {
       projectId: line.projectId ?? null,
       activityId: line.activityId ?? null,
       eventId: line.eventId ?? null,
+      fixedDepositId: line.fixedDepositId ?? null,
     }));
   }
 
@@ -487,6 +490,27 @@ export class VouchersService {
           throw new BadRequestException(
             `${activity.nameTa} is no longer an active activity${where}`,
           );
+        }
+      }
+
+      if (line.fixedDepositId) {
+        if (dto.kind !== VoucherKind.receipt) {
+          throw new BadRequestException(`Only a receipt can carry deposit interest${where}`);
+        }
+
+        // Interest is read through the deposit's slot; an event too would count it twice for the pooja.
+        if (line.eventId) {
+          throw new BadRequestException(
+            `A deposit interest line cannot also name an occurrence${where}`,
+          );
+        }
+
+        const deposit = await this.prisma.fixedDeposit.findUnique({
+          where: { id: line.fixedDepositId },
+        });
+
+        if (!deposit) {
+          throw new NotFoundException(`Fixed deposit ${line.fixedDepositId} was not found${where}`);
         }
       }
     }
@@ -581,6 +605,7 @@ export class VouchersService {
         projectId: line.projectId,
         activityId: line.activityId,
         eventId: line.eventId,
+        fixedDepositId: line.fixedDepositId,
         account: toAccountRef(line.account),
         fund: toFundRef(line.fund),
         project: line.project ? toProjectRef(line.project) : null,

@@ -5,6 +5,7 @@ import {
   IsEnum,
   IsIn,
   IsInt,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsPositive,
@@ -16,7 +17,7 @@ import {
 
 import { InterestPayoutWire } from '../../../common/enums/wire';
 import type { WireInterestPayout } from '../../../common/enums/wire';
-import { DepositStatus } from '../../../generated/prisma/enums';
+import { DepositStatus, PaymentMode } from '../../../generated/prisma/enums';
 
 export class DepositRecordDto {
   @ApiProperty() id!: number;
@@ -31,6 +32,9 @@ export class DepositRecordDto {
   @ApiProperty({ enum: InterestPayoutWire.values }) interestPayout!: WireInterestPayout;
   @ApiProperty() fundId!: number;
   @ApiProperty() fundName!: string;
+  @ApiProperty({ nullable: true, description: 'Null for a kovil deposit' }) slotId!: number | null;
+  @ApiProperty({ nullable: true }) poojaName!: string | null;
+  @ApiProperty({ nullable: true }) bankAccountId!: number | null;
   @ApiProperty({ enum: DepositStatus }) status!: DepositStatus;
   @ApiProperty({ nullable: true }) renewedFromId!: number | null;
   @ApiProperty({ nullable: true }) notes!: string | null;
@@ -40,6 +44,7 @@ export class DepositRecordDto {
   @ApiProperty({ description: 'Negative once past maturity' }) daysToMaturity!: number;
   @ApiProperty() isMaturingSoon!: boolean;
   @ApiProperty() isOverdue!: boolean;
+  @ApiProperty({ description: 'Posted interest receipts, all years' }) interestReceived!: number;
 }
 
 export class CreateFixedDepositDto {
@@ -96,6 +101,13 @@ export class CreateFixedDepositDto {
   @Min(1)
   fundId!: number;
 
+  @ApiPropertyOptional({ description: 'The pooja slot the interest pays for; omit for the kovil' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  slotId?: number | null;
+
   @ApiPropertyOptional()
   @IsOptional()
   @Type(() => Number)
@@ -114,7 +126,11 @@ export class UpdateFixedDepositDto extends PartialType(
   OmitType(CreateFixedDepositDto, ['certificateNo'] as const),
 ) {}
 
-export class RenewDepositDto extends OmitType(CreateFixedDepositDto, ['fundId'] as const) {}
+// Fund and pooja carry over from the certificate being renewed.
+export class RenewDepositDto extends OmitType(CreateFixedDepositDto, [
+  'fundId',
+  'slotId',
+] as const) {}
 
 export class QueryDepositsDto {
   @ApiPropertyOptional({ enum: DepositStatus })
@@ -132,4 +148,96 @@ export class QueryDepositsDto {
   @IsOptional()
   @Transform(({ value }: { value: unknown }) => value === true || value === 'true')
   maturingSoon?: boolean;
+}
+
+export class RecordInterestDto {
+  @ApiProperty({ minimum: 0.01 })
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @IsPositive()
+  amount!: number;
+
+  @ApiProperty({ example: '2026-10-29' })
+  @IsDateString()
+  receivedOn!: string;
+
+  @ApiProperty({ enum: PaymentMode })
+  @IsEnum(PaymentMode)
+  mode!: PaymentMode;
+
+  @ApiPropertyOptional({ description: "Defaults to the deposit's bank account" })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  bankAccountId?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  chequeNo?: string;
+
+  @ApiProperty({ description: 'The number on the paper voucher book' })
+  @IsString()
+  @IsNotEmpty({ message: 'The manual voucher number is required' })
+  @MaxLength(60)
+  manualVoucherNo!: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  notes?: string;
+}
+
+class DepositInterestYearDto {
+  @ApiProperty() financialYearId!: number;
+  @ApiProperty() label!: string;
+  @ApiProperty() amount!: number;
+}
+
+export class DepositInterestDto {
+  @ApiProperty() depositId!: number;
+  @ApiProperty({ type: [String], description: 'This certificate and those it renewed or became' })
+  certificates!: string[];
+  @ApiProperty({ type: [DepositInterestYearDto] }) years!: DepositInterestYearDto[];
+  @ApiProperty() total!: number;
+}
+
+export class SlotOptionDto {
+  @ApiProperty() id!: number;
+  @ApiProperty({ description: 'Pooja type and slot together' }) poojaName!: string;
+  @ApiProperty() poojaTypeId!: number;
+  @ApiProperty() poojaTypeName!: string;
+  @ApiProperty({ nullable: true, description: 'Null when the pooja type has a single slot' })
+  slotName!: string | null;
+  @ApiProperty({ nullable: true }) sponsorName!: string | null;
+}
+
+class PoojaFundingRowDto {
+  @ApiProperty({ nullable: true, description: 'Null for the kovil deposits' })
+  slotId!: number | null;
+  @ApiProperty({ nullable: true }) poojaName!: string | null;
+  @ApiProperty({ nullable: true }) sponsorName!: string | null;
+  @ApiProperty() deposits!: number;
+  @ApiProperty({ description: 'Principal of the active deposits' }) principal!: number;
+  @ApiProperty() interestReceived!: number;
+  @ApiProperty({ description: 'Other receipts for the occurrences' }) sponsorTopUps!: number;
+  @ApiProperty() spent!: number;
+  @ApiProperty({ description: 'Positive is surplus, negative a shortfall' }) balance!: number;
+}
+
+export class PoojaFundingDto {
+  @ApiProperty() financialYearId!: number;
+  @ApiProperty() financialYearLabel!: string;
+  @ApiProperty({ type: [PoojaFundingRowDto] }) rows!: PoojaFundingRowDto[];
+}
+
+export class QueryPoojaFundingDto {
+  @ApiPropertyOptional({ description: 'Defaults to the current year' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  financialYearId?: number;
 }

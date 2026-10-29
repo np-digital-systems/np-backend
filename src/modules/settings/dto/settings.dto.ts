@@ -28,6 +28,16 @@ export class AccountingSettingsDto {
   sanththaAccountId?: number;
 
   @ApiPropertyOptional({
+    description:
+      'The income head fixed deposit interest is receipted to. The fund follows the deposit.',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  depositInterestAccountId?: number;
+
+  @ApiPropertyOptional({
     default: false,
     description:
       'Whether the person who raised a voucher may also approve it. Off by default: approval is a second pair of eyes.',
@@ -54,6 +64,7 @@ export class SettingDto {
 export interface AccountingSettings {
   cashAccountId: number | null;
   sanththaAccountId: number | null;
+  depositInterestAccountId: number | null;
   allowSelfApproval: boolean;
   depositMaturityAlertDays: number;
 }

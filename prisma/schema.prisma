@@ -612,22 +612,24 @@ model Voucher {
 /// receipt credits income and every line of a payment debits expenditure, which
 /// follows from `voucher.kind`.
 model VoucherLine {
-  id         BigInt  @id @default(autoincrement())
-  voucherId  BigInt  @map("voucher_id")
-  lineNo     Int     @map("line_no") @db.SmallInt
-  accountId  Int     @map("account_id")
-  amount     Decimal @db.Decimal(14, 2)
-  fundId     Int     @map("fund_id")
-  projectId  Int?    @map("project_id")
-  activityId Int?    @map("activity_id")
-  eventId    Int?    @map("event_id")
+  id             BigInt  @id @default(autoincrement())
+  voucherId      BigInt  @map("voucher_id")
+  lineNo         Int     @map("line_no") @db.SmallInt
+  accountId      Int     @map("account_id")
+  amount         Decimal @db.Decimal(14, 2)
+  fundId         Int     @map("fund_id")
+  projectId      Int?    @map("project_id")
+  activityId     Int?    @map("activity_id")
+  eventId        Int?    @map("event_id")
+  fixedDepositId Int?    @map("fixed_deposit_id")
 
-  voucher  Voucher   @relation(fields: [voucherId], references: [id], onDelete: Cascade)
-  account  Account   @relation(fields: [accountId], references: [id])
-  fund     Fund      @relation(fields: [fundId], references: [id])
-  project  Project?  @relation(fields: [projectId], references: [id])
-  activity Activity? @relation(fields: [activityId], references: [id])
-  event    Event?    @relation(fields: [eventId], references: [id])
+  voucher      Voucher       @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  account      Account       @relation(fields: [accountId], references: [id])
+  fund         Fund          @relation(fields: [fundId], references: [id])
+  project      Project?      @relation(fields: [projectId], references: [id])
+  activity     Activity?     @relation(fields: [activityId], references: [id])
+  event        Event?        @relation(fields: [eventId], references: [id])
+  fixedDeposit FixedDeposit? @relation(fields: [fixedDepositId], references: [id])
 
   @@unique([voucherId, lineNo], map: "voucher_line_no")
   @@index([accountId], map: "voucher_lines_account")
@@ -635,6 +637,7 @@ model VoucherLine {
   @@index([fundId], map: "voucher_lines_fund")
   @@index([projectId], map: "voucher_lines_project")
   @@index([eventId], map: "voucher_lines_event")
+  @@index([fixedDepositId], map: "voucher_lines_fixed_deposit")
   @@map("voucher_lines")
 }
 
@@ -651,30 +654,32 @@ model VoucherSequence {
 }
 
 model LedgerEntry {
-  id            BigInt   @id @default(autoincrement())
-  voucherId     BigInt   @map("voucher_id")
-  lineNo        Int      @map("line_no") @db.SmallInt
-  date          DateTime @db.Date
-  accountId     Int      @map("account_id")
-  fundId        Int      @map("fund_id")
-  projectId     Int?     @map("project_id")
+  id             BigInt   @id @default(autoincrement())
+  voucherId      BigInt   @map("voucher_id")
+  lineNo         Int      @map("line_no") @db.SmallInt
+  date           DateTime @db.Date
+  accountId      Int      @map("account_id")
+  fundId         Int      @map("fund_id")
+  projectId      Int?     @map("project_id")
   /// Carried only on the income or expense line, never on its cash or bank
   /// contra. Both sides bearing these would net to nil.
-  activityId    Int?     @map("activity_id")
-  partyId       Int?     @map("party_id")
-  eventId       Int?     @map("event_id")
-  debit         Decimal? @db.Decimal(14, 2)
-  credit        Decimal? @db.Decimal(14, 2)
-  bankAccountId Int?     @map("bank_account_id")
+  activityId     Int?     @map("activity_id")
+  partyId        Int?     @map("party_id")
+  eventId        Int?     @map("event_id")
+  fixedDepositId Int?     @map("fixed_deposit_id")
+  debit          Decimal? @db.Decimal(14, 2)
+  credit         Decimal? @db.Decimal(14, 2)
+  bankAccountId  Int?     @map("bank_account_id")
 
-  voucher     Voucher      @relation(fields: [voucherId], references: [id])
-  account     Account      @relation(fields: [accountId], references: [id])
-  fund        Fund         @relation(fields: [fundId], references: [id])
-  project     Project?     @relation(fields: [projectId], references: [id])
-  activity    Activity?    @relation(fields: [activityId], references: [id])
-  party       Party?       @relation(fields: [partyId], references: [id])
-  event       Event?       @relation(fields: [eventId], references: [id])
-  bankAccount BankAccount? @relation(fields: [bankAccountId], references: [id])
+  voucher      Voucher       @relation(fields: [voucherId], references: [id])
+  account      Account       @relation(fields: [accountId], references: [id])
+  fund         Fund          @relation(fields: [fundId], references: [id])
+  project      Project?      @relation(fields: [projectId], references: [id])
+  activity     Activity?     @relation(fields: [activityId], references: [id])
+  party        Party?        @relation(fields: [partyId], references: [id])
+  event        Event?        @relation(fields: [eventId], references: [id])
+  fixedDeposit FixedDeposit? @relation(fields: [fixedDepositId], references: [id])
+  bankAccount  BankAccount?  @relation(fields: [bankAccountId], references: [id])
 
   @@unique([voucherId, lineNo], map: "voucher_line")
   @@index([accountId, date], map: "ledger_account_date")
@@ -684,6 +689,7 @@ model LedgerEntry {
   @@index([activityId, date], map: "ledger_activity_date")
   @@index([partyId, date], map: "ledger_party_date")
   @@index([eventId], map: "ledger_event")
+  @@index([fixedDepositId], map: "ledger_fixed_deposit")
   @@index([date], map: "ledger_date")
   @@map("ledger_entries")
 }
@@ -700,17 +706,22 @@ model FixedDeposit {
   tenureMonths   Int            @map("tenure_months") @db.SmallInt
   interestPayout InterestPayout @map("interest_payout")
   fundId         Int            @map("fund_id")
+  slotId         Int?           @map("slot_id")
   status         DepositStatus  @default(active)
   renewedFromId  Int?           @map("renewed_from_id")
   bankAccountId  Int?           @map("bank_account_id")
   notes          String?
 
-  fund        Fund           @relation(fields: [fundId], references: [id])
-  bankAccount BankAccount?   @relation(fields: [bankAccountId], references: [id])
-  renewedFrom FixedDeposit?  @relation("DepositRenewal", fields: [renewedFromId], references: [id])
-  renewals    FixedDeposit[] @relation("DepositRenewal")
+  fund         Fund           @relation(fields: [fundId], references: [id])
+  slot         EventSlot?     @relation(fields: [slotId], references: [id])
+  bankAccount  BankAccount?   @relation(fields: [bankAccountId], references: [id])
+  renewedFrom  FixedDeposit?  @relation("DepositRenewal", fields: [renewedFromId], references: [id])
+  renewals     FixedDeposit[] @relation("DepositRenewal")
+  voucherLines VoucherLine[]
+  ledgerLines  LedgerEntry[]
 
   @@index([status, maturesOn], map: "deposits_maturing")
+  @@index([slotId], map: "deposits_slot")
   @@map("fixed_deposits")
 }
 
@@ -774,6 +785,7 @@ model EventSlot {
   sponsors  EventTypeSponsor[]
   events    Event[]
   costings  EventCosting[]
+  deposits  FixedDeposit[]
 
   @@unique([eventTypeId, instanceIdentifier], map: "one_slot_per_instance")
   @@map("event_slots")

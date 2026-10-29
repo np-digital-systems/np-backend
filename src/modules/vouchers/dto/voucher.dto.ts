@@ -44,6 +44,8 @@ class VoucherLineDto {
   activityId!: number | null;
   @ApiProperty({ nullable: true, description: 'The occurrence this line is for' })
   eventId!: number | null;
+  @ApiProperty({ nullable: true, description: 'The deposit whose interest this line receipts' })
+  fixedDepositId!: number | null;
   @ApiProperty({ type: AccountRefDto }) account!: AccountRefDto;
   @ApiProperty({ type: FundRefDto }) fund!: FundRefDto;
   @ApiProperty({ type: ProjectRefDto, nullable: true }) project!: ProjectRefDto | null;
@@ -91,6 +93,13 @@ export class WriteVoucherLineDto {
   @IsInt()
   @Min(1)
   eventId?: number | null;
+
+  @ApiPropertyOptional({ description: 'The deposit whose interest this line receipts' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  fixedDepositId?: number | null;
 }
 
 class VoucherDto {
