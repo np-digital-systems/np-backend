@@ -40,8 +40,10 @@ const DEPOSIT_INCLUDE = {
 type DepositRow = Prisma.FixedDepositGetPayload<{ include: typeof DEPOSIT_INCLUDE }>;
 type SlotRow = NonNullable<DepositRow['slot']>;
 
-const describeInterest = (certificateNo: string): string =>
-  `நிலையான வைப்பு வட்டி — ${certificateNo}`;
+const describeInterest = (certificateNo: string, poojaName: string | null): string =>
+  poojaName
+    ? `நிலையான வைப்பு வட்டி — ${certificateNo} — ${poojaName}`
+    : `நிலையான வைப்பு வட்டி — ${certificateNo}`;
 
 const poojaNameOf = (slot: SlotRow): string =>
   slot.eventType.noOfInstances > 1
@@ -222,27 +224,53 @@ export class FixedDepositsService {
     dto: RecordInterestDto,
     context: ActorContext,
   ): Promise<VoucherRecordDto> {
-    const deposit = await this.prisma.fixedDeposit.findUnique({ where: { id } });
+    const deposit = await this.prisma.fixedDeposit.findUnique({
+      where: { id },
+      include: {
+        slot: {
+          include: {
+            eventType: { include: { activity: true } },
+            sponsors: { include: { party: true }, orderBy: { createdAt: 'asc' } },
+          },
+        },
+      },
+    });
 
     if (!deposit) throw new NotFoundException(`Fixed deposit ${id} was not found`);
 
     const accountId = await this.settings.depositInterestAccountId();
 
+    // Inactive ones are left off rather than letting the voucher's coding checks refuse the receipt.
+    const activity = deposit.slot?.eventType.activity;
+    const sponsor = deposit.slot?.sponsors.find((entry) => entry.party.isActive)?.party;
+
     return this.vouchers.raiseForApproval(
       {
         kind: VoucherKind.receipt,
         date: dto.receivedOn,
-        description: describeInterest(deposit.certificateNo),
+        description: describeInterest(
+          deposit.certificateNo,
+          deposit.slot ? poojaNameOf(deposit.slot) : null,
+        ),
         mode: dto.mode,
         bankAccountId:
           dto.mode === PaymentMode.cash
             ? undefined
             : (dto.bankAccountId ?? deposit.bankAccountId ?? undefined),
         chequeNo: dto.chequeNo,
-        party: deposit.bankName,
+        party: sponsor?.nameTa ?? deposit.bankName,
+        partyId: sponsor?.id,
         manualVoucherNo: dto.manualVoucherNo,
         notes: dto.notes,
-        lines: [{ accountId, amount: dto.amount, fundId: deposit.fundId, fixedDepositId: id }],
+        lines: [
+          {
+            accountId,
+            amount: dto.amount,
+            fundId: deposit.fundId,
+            activityId: activity?.isActive ? activity.id : undefined,
+            fixedDepositId: id,
+          },
+        ],
       },
       context,
     );
