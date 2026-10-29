@@ -9,20 +9,44 @@ import { toRupees } from '../../common/money/money';
 import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
 import { InterestPayoutWire } from '../../common/enums/wire';
-import { DepositStatus } from '../../generated/prisma/enums';
+import { AccountType, DepositStatus, PaymentMode, VoucherKind } from '../../generated/prisma/enums';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
+import { LedgerQueryService } from '../ledger/ledger-query.service';
 import { SettingsService } from '../settings/settings.service';
+import { describeInstance } from '../sponsors/instance-label';
+import { VoucherRecordDto } from '../vouchers/dto/voucher.dto';
+import { VouchersService } from '../vouchers/vouchers.service';
 import { depositMaths } from './deposit-maths';
 import {
   CreateFixedDepositDto,
+  DepositInterestDto,
   DepositRecordDto,
+  PoojaFundingDto,
   QueryDepositsDto,
+  SlotOptionDto,
+  QueryPoojaFundingDto,
+  RecordInterestDto,
   RenewDepositDto,
   UpdateFixedDepositDto,
 } from './dto/fixed-deposit.dto';
+import { netExpense, netIncome, poojaFunding } from './pooja-funding';
 
-type DepositRow = Prisma.FixedDepositGetPayload<{ include: { fund: true } }>;
+const DEPOSIT_INCLUDE = {
+  fund: true,
+  slot: { include: { eventType: true } },
+} satisfies Prisma.FixedDepositInclude;
+
+type DepositRow = Prisma.FixedDepositGetPayload<{ include: typeof DEPOSIT_INCLUDE }>;
+type SlotRow = NonNullable<DepositRow['slot']>;
+
+const describeInterest = (certificateNo: string): string =>
+  `நிலையான வைப்பு வட்டி — ${certificateNo}`;
+
+const poojaNameOf = (slot: SlotRow): string =>
+  slot.eventType.noOfInstances > 1
+    ? `${slot.eventType.nameTa} — ${describeInstance(slot.eventType.frequencyType, slot.instanceIdentifier, slot.customInstanceName)}`
+    : slot.eventType.nameTa;
 
 @Injectable()
 export class FixedDepositsService {
@@ -30,17 +54,24 @@ export class FixedDepositsService {
     private readonly prisma: PrismaService,
     private readonly settings: SettingsService,
     private readonly audit: AuditService,
+    private readonly ledger: LedgerQueryService,
+    private readonly vouchers: VouchersService,
   ) {}
 
   async findMany(query: QueryDepositsDto): Promise<DepositRecordDto[]> {
     const deposits = await this.prisma.fixedDeposit.findMany({
       where: { status: query.status, fundId: query.fundId },
-      include: { fund: true },
+      include: DEPOSIT_INCLUDE,
       orderBy: { maturesOn: 'asc' },
     });
 
-    const { depositMaturityAlertDays } = await this.settings.accounting();
-    const records = deposits.map((deposit) => this.toRecord(deposit, depositMaturityAlertDays));
+    const [{ depositMaturityAlertDays }, interest] = await Promise.all([
+      this.settings.accounting(),
+      this.ledger.byDimensionAndType('fixedDepositId'),
+    ]);
+    const records = deposits.map((deposit) =>
+      this.toRecord(deposit, depositMaturityAlertDays, netIncome(interest.get(deposit.id))),
+    );
 
     return query.maturingSoon ? records.filter((record) => record.isMaturingSoon) : records;
   }
@@ -48,23 +79,26 @@ export class FixedDepositsService {
   async findOneOrFail(id: number): Promise<DepositRecordDto> {
     const deposit = await this.prisma.fixedDeposit.findUnique({
       where: { id },
-      include: { fund: true },
+      include: DEPOSIT_INCLUDE,
     });
 
     if (!deposit) throw new NotFoundException(`Fixed deposit ${id} was not found`);
 
-    const { depositMaturityAlertDays } = await this.settings.accounting();
+    const [{ depositMaturityAlertDays }, interest] = await Promise.all([
+      this.settings.accounting(),
+      this.ledger.byDimensionAndType('fixedDepositId'),
+    ]);
 
-    return this.toRecord(deposit, depositMaturityAlertDays);
+    return this.toRecord(deposit, depositMaturityAlertDays, netIncome(interest.get(id)));
   }
 
   async create(dto: CreateFixedDepositDto, context: ActorContext): Promise<DepositRecordDto> {
     this.assertDates(dto.placedOn, dto.maturesOn);
     await this.assertFundIsActive(dto.fundId);
+    if (dto.slotId) await this.assertSlotIsActive(dto.slotId);
 
     const deposit = await this.prisma.fixedDeposit.create({
-      data: this.dataFrom(dto, dto.fundId),
-      include: { fund: true },
+      data: this.dataFrom(dto, dto.fundId, dto.slotId ?? null),
     });
 
     await this.audit.record(context, {
@@ -92,6 +126,7 @@ export class FixedDepositsService {
     const placedOn = dto.placedOn ?? before.placedOn.toISOString().slice(0, 10);
     const maturesOn = dto.maturesOn ?? before.maturesOn.toISOString().slice(0, 10);
     this.assertDates(placedOn, maturesOn);
+    if (dto.slotId) await this.assertSlotIsActive(dto.slotId);
 
     const deposit = await this.prisma.fixedDeposit.update({
       where: { id },
@@ -104,6 +139,7 @@ export class FixedDepositsService {
         maturesOn: dto.maturesOn ? new Date(dto.maturesOn) : undefined,
         tenureMonths: dto.tenureMonths,
         interestPayout: InterestPayoutWire.toPrismaOptional(dto.interestPayout),
+        slotId: dto.slotId,
         bankAccountId: dto.bankAccountId,
         notes: dto.notes,
       },
@@ -166,8 +202,7 @@ export class FixedDepositsService {
       await tx.fixedDeposit.update({ where: { id }, data: { status: DepositStatus.renewed } });
 
       return tx.fixedDeposit.create({
-        data: { ...this.dataFrom(dto, previous.fundId), renewedFromId: id },
-        include: { fund: true },
+        data: { ...this.dataFrom(dto, previous.fundId, previous.slotId), renewedFromId: id },
       });
     });
 
@@ -181,9 +216,210 @@ export class FixedDepositsService {
     return this.findOneOrFail(renewal.id);
   }
 
+  // Raised for approval like any receipt; the line names the deposit so its interest can be traced.
+  async recordInterest(
+    id: number,
+    dto: RecordInterestDto,
+    context: ActorContext,
+  ): Promise<VoucherRecordDto> {
+    const deposit = await this.prisma.fixedDeposit.findUnique({ where: { id } });
+
+    if (!deposit) throw new NotFoundException(`Fixed deposit ${id} was not found`);
+
+    const accountId = await this.settings.depositInterestAccountId();
+
+    return this.vouchers.raiseForApproval(
+      {
+        kind: VoucherKind.receipt,
+        date: dto.receivedOn,
+        description: describeInterest(deposit.certificateNo),
+        mode: dto.mode,
+        bankAccountId:
+          dto.mode === PaymentMode.cash
+            ? undefined
+            : (dto.bankAccountId ?? deposit.bankAccountId ?? undefined),
+        chequeNo: dto.chequeNo,
+        party: deposit.bankName,
+        manualVoucherNo: dto.manualVoucherNo,
+        notes: dto.notes,
+        lines: [{ accountId, amount: dto.amount, fundId: deposit.fundId, fixedDepositId: id }],
+      },
+      context,
+    );
+  }
+
+  // Across the renewal chain: renewing issues a new certificate, but it is the same money earning.
+  async interestByYear(id: number): Promise<DepositInterestDto> {
+    const chain = await this.renewalChain(id);
+
+    const entries = await this.prisma.ledgerEntry.findMany({
+      where: {
+        ...this.ledger.postedIn(),
+        fixedDepositId: { in: chain.map((deposit) => deposit.id) },
+        account: { type: AccountType.income },
+      },
+      select: {
+        debit: true,
+        credit: true,
+        voucher: {
+          select: { financialYear: { select: { id: true, label: true, startsOn: true } } },
+        },
+      },
+    });
+
+    const years = new Map<number, { label: string; startsOn: Date; amount: number }>();
+
+    for (const entry of entries) {
+      const year = entry.voucher.financialYear;
+      const running = years.get(year.id) ?? {
+        label: year.label,
+        startsOn: year.startsOn,
+        amount: 0,
+      };
+
+      running.amount += toRupees(entry.credit) - toRupees(entry.debit);
+      years.set(year.id, running);
+    }
+
+    const rows = [...years.entries()]
+      .sort(([, a], [, b]) => a.startsOn.getTime() - b.startsOn.getTime())
+      .map(([financialYearId, year]) => ({
+        financialYearId,
+        label: year.label,
+        amount: Math.round(year.amount * 100) / 100,
+      }));
+
+    return {
+      depositId: id,
+      certificates: chain.map((deposit) => deposit.certificateNo),
+      years: rows,
+      total: Math.round(rows.reduce((total, row) => total + row.amount, 0) * 100) / 100,
+    };
+  }
+
+  // Interest comes through the deposits; top-ups and spending are the slot's occurrences, by voucher year.
+  async fundingByPooja(query: QueryPoojaFundingDto): Promise<PoojaFundingDto> {
+    const year = query.financialYearId
+      ? await this.prisma.financialYear.findUnique({ where: { id: query.financialYearId } })
+      : await this.prisma.financialYear.findFirst({ where: { isCurrent: true } });
+
+    if (!year) {
+      throw new NotFoundException(
+        query.financialYearId
+          ? `Financial year ${query.financialYearId} was not found`
+          : 'No financial year is marked current',
+      );
+    }
+
+    const deposits = await this.prisma.fixedDeposit.findMany({
+      include: {
+        slot: {
+          include: {
+            eventType: true,
+            sponsors: { include: { party: { select: { nameTa: true } } } },
+          },
+        },
+      },
+    });
+
+    const slotIds = [...new Set(deposits.flatMap((deposit) => deposit.slotId ?? []))];
+
+    const [interest, byEvent, events] = await Promise.all([
+      this.ledger.byDimensionAndType('fixedDepositId', year.id),
+      this.ledger.byDimensionAndType('eventId', year.id),
+      this.prisma.event.findMany({
+        where: { slotId: { in: slotIds } },
+        select: { id: true, slotId: true },
+      }),
+    ]);
+
+    const eventsOf = new Map<number, number[]>();
+
+    for (const event of events) {
+      eventsOf.set(event.slotId, [...(eventsOf.get(event.slotId) ?? []), event.id]);
+    }
+
+    const groups = new Map<number | null, typeof deposits>();
+
+    for (const deposit of deposits) {
+      groups.set(deposit.slotId, [...(groups.get(deposit.slotId) ?? []), deposit]);
+    }
+
+    const rows = [...groups.entries()].map(([slotId, members]) => {
+      const slot = members[0].slot;
+      const occurrences = slotId === null ? [] : (eventsOf.get(slotId) ?? []);
+      const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
+
+      const funding = poojaFunding(
+        sum(members.map((deposit) => netIncome(interest.get(deposit.id)))),
+        sum(occurrences.map((eventId) => netIncome(byEvent.get(eventId)))),
+        sum(occurrences.map((eventId) => netExpense(byEvent.get(eventId)))),
+      );
+
+      return {
+        slotId,
+        poojaName: slot ? poojaNameOf(slot) : null,
+        sponsorName: slot?.sponsors.map((sponsor) => sponsor.party.nameTa).join(', ') || null,
+        deposits: members.length,
+        principal: toRupees(
+          members
+            .filter((deposit) => deposit.status === DepositStatus.active)
+            .reduce((total, deposit) => total.plus(deposit.principal), new Prisma.Decimal(0)),
+        ),
+        ...funding,
+      };
+    });
+
+    // Poojas by name, the kovil's own deposits last.
+    rows.sort((a, b) =>
+      a.poojaName === null ? 1 : b.poojaName === null ? -1 : a.poojaName.localeCompare(b.poojaName),
+    );
+
+    return { financialYearId: year.id, financialYearLabel: year.label, rows };
+  }
+
+  async slotOptions(): Promise<SlotOptionDto[]> {
+    const slots = await this.prisma.eventSlot.findMany({
+      where: { isActive: true },
+      include: { eventType: true },
+      orderBy: [{ eventType: { nameTa: 'asc' } }, { instanceIdentifier: 'asc' }],
+    });
+
+    return slots.map((slot) => ({ id: slot.id, poojaName: poojaNameOf(slot) }));
+  }
+
+  private async renewalChain(id: number): Promise<{ id: number; certificateNo: string }[]> {
+    const all = await this.prisma.fixedDeposit.findMany({
+      select: { id: true, certificateNo: true, renewedFromId: true },
+    });
+
+    const byId = new Map(all.map((deposit) => [deposit.id, deposit]));
+    const start = byId.get(id);
+
+    if (!start) throw new NotFoundException(`Fixed deposit ${id} was not found`);
+
+    const chain = [start];
+
+    for (let previous = start.renewedFromId; previous !== null;) {
+      const deposit = byId.get(previous);
+      if (!deposit) break;
+      chain.unshift(deposit);
+      previous = deposit.renewedFromId;
+    }
+
+    for (let next = all.find((deposit) => deposit.renewedFromId === start.id); next;) {
+      chain.push(next);
+      const current = next;
+      next = all.find((deposit) => deposit.renewedFromId === current.id);
+    }
+
+    return chain.map((deposit) => ({ id: deposit.id, certificateNo: deposit.certificateNo }));
+  }
+
   private dataFrom(
     dto: CreateFixedDepositDto | RenewDepositDto,
     fundId: number,
+    slotId: number | null,
   ): Prisma.FixedDepositUncheckedCreateInput {
     return {
       certificateNo: dto.certificateNo,
@@ -196,6 +432,7 @@ export class FixedDepositsService {
       tenureMonths: dto.tenureMonths,
       interestPayout: InterestPayoutWire.toPrisma(dto.interestPayout),
       fundId,
+      slotId,
       bankAccountId: dto.bankAccountId,
       notes: dto.notes,
     };
@@ -214,7 +451,18 @@ export class FixedDepositsService {
     if (!fund.isActive) throw new BadRequestException(`Fund ${fund.nameTa} is closed`);
   }
 
-  private toRecord(deposit: DepositRow, alertDays: number): DepositRecordDto {
+  private async assertSlotIsActive(slotId: number): Promise<void> {
+    const slot = await this.prisma.eventSlot.findUnique({ where: { id: slotId } });
+
+    if (!slot) throw new NotFoundException(`Pooja slot ${slotId} was not found`);
+    if (!slot.isActive) throw new BadRequestException('That pooja slot is no longer active');
+  }
+
+  private toRecord(
+    deposit: DepositRow,
+    alertDays: number,
+    interestReceived: number,
+  ): DepositRecordDto {
     const principal = toRupees(deposit.principal);
     const rate = toRupees(deposit.interestRate);
     const maths = depositMaths(principal, rate, deposit.placedOn, deposit.maturesOn);
@@ -233,12 +481,16 @@ export class FixedDepositsService {
       interestPayout: InterestPayoutWire.toWire(deposit.interestPayout),
       fundId: deposit.fundId,
       fundName: deposit.fund.nameEn ?? deposit.fund.nameTa,
+      slotId: deposit.slotId,
+      poojaName: deposit.slot ? poojaNameOf(deposit.slot) : null,
+      bankAccountId: deposit.bankAccountId,
       status: deposit.status,
       renewedFromId: deposit.renewedFromId,
       notes: deposit.notes,
       ...maths,
       isMaturingSoon: isActive && maths.daysToMaturity >= 0 && maths.daysToMaturity <= alertDays,
       isOverdue: isActive && maths.daysToMaturity < 0,
+      interestReceived,
     };
   }
 }

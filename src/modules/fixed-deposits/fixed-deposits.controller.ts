@@ -5,11 +5,17 @@ import { Actor } from '../../common/decorators/actor.decorator';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import type { ActorContext } from '../../common/types/authenticated-user';
 import { DepositStatus } from '../../generated/prisma/enums';
+import { VoucherRecordDto } from '../vouchers/dto/voucher.dto';
 import {
   CreateFixedDepositDto,
+  DepositInterestDto,
   DepositRecordDto,
+  PoojaFundingDto,
   QueryDepositsDto,
+  QueryPoojaFundingDto,
+  RecordInterestDto,
   RenewDepositDto,
+  SlotOptionDto,
   UpdateFixedDepositDto,
 } from './dto/fixed-deposit.dto';
 import { FixedDepositsService } from './fixed-deposits.service';
@@ -25,6 +31,22 @@ export class FixedDepositsController {
   @ApiOperation({ summary: 'Deposits with interest and maturity worked out' })
   findMany(@Query() query: QueryDepositsDto): Promise<DepositRecordDto[]> {
     return this.deposits.findMany(query);
+  }
+
+  @Get('pooja-funding')
+  @RequirePermissions('fixed-deposit:view')
+  @ApiOperation({
+    summary: 'Per pooja: deposit interest and top-ups against what it cost, for a year',
+  })
+  fundingByPooja(@Query() query: QueryPoojaFundingDto): Promise<PoojaFundingDto> {
+    return this.deposits.fundingByPooja(query);
+  }
+
+  @Get('slot-options')
+  @RequirePermissions('fixed-deposit:view')
+  @ApiOperation({ summary: 'Pooja slots a deposit can pay for' })
+  slotOptions(): Promise<SlotOptionDto[]> {
+    return this.deposits.slotOptions();
   }
 
   @Get(':id')
@@ -50,6 +72,24 @@ export class FixedDepositsController {
     @Actor() context: ActorContext,
   ): Promise<DepositRecordDto> {
     return this.deposits.update(id, dto, context);
+  }
+
+  @Get(':id/interest')
+  @RequirePermissions('fixed-deposit:view')
+  @ApiOperation({ summary: 'Posted interest by financial year, across the renewal chain' })
+  interestByYear(@Param('id', ParseIntPipe) id: number): Promise<DepositInterestDto> {
+    return this.deposits.interestByYear(id);
+  }
+
+  @Post(':id/interest')
+  @RequirePermissions('fixed-deposit:manage')
+  @ApiOperation({ summary: 'Raise the interest receipt for approval' })
+  recordInterest(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: RecordInterestDto,
+    @Actor() context: ActorContext,
+  ): Promise<VoucherRecordDto> {
+    return this.deposits.recordInterest(id, dto, context);
   }
 
   @Post(':id/mature')
