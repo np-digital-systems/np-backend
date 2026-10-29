@@ -5,7 +5,7 @@ import { Prisma } from '../../generated/prisma/client';
 import { AccountType, VoucherStatus } from '../../generated/prisma/enums';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 
-type Dimension = 'activityId' | 'partyId' | 'eventId';
+type Dimension = 'activityId' | 'partyId' | 'eventId' | 'fixedDepositId';
 
 export interface Sides {
   debit: number;
