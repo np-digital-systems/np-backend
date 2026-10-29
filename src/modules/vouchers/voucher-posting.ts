@@ -9,6 +9,7 @@ export interface PostingLine {
   projectId: number | null;
   activityId: number | null;
   eventId: number | null;
+  fixedDepositId: number | null;
   bankAccountId: number | null;
   /** False for the cash/bank contra line. */
   isCoding: boolean;
@@ -21,6 +22,7 @@ interface CodingLine {
   projectId: number | null;
   activityId: number | null;
   eventId: number | null;
+  fixedDepositId: number | null;
 }
 
 export interface PostingInput {
@@ -56,6 +58,7 @@ export function buildPostingLines(input: PostingInput): PostingLine[] {
     projectId: null,
     activityId: null,
     eventId: null,
+    fixedDepositId: null,
     bankAccountId,
     isCoding: false,
   }));
@@ -69,6 +72,7 @@ export function buildPostingLines(input: PostingInput): PostingLine[] {
     projectId: line.projectId,
     activityId: line.activityId,
     eventId: line.eventId,
+    fixedDepositId: line.fixedDepositId,
     bankAccountId: null,
     isCoding: true,
   }));

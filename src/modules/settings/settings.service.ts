@@ -14,6 +14,7 @@ import {
 const ACCOUNTING_DEFAULTS: AccountingSettings = {
   cashAccountId: null,
   sanththaAccountId: null,
+  depositInterestAccountId: null,
   allowSelfApproval: false,
   depositMaturityAlertDays: 30,
 };
@@ -83,9 +84,25 @@ export class SettingsService {
     return sanththaAccountId;
   }
 
+  /** The deposit interest income head, or a clear error explaining how to configure one. */
+  async depositInterestAccountId(): Promise<number> {
+    const { depositInterestAccountId } = await this.accounting();
+
+    if (depositInterestAccountId === null) {
+      throw new BadRequestException(
+        'No deposit interest head is configured. Set accounting.depositInterestAccountId to the income head deposit interest is receipted to.',
+      );
+    }
+
+    return depositInterestAccountId;
+  }
+
   async updateAccounting(dto: AccountingSettingsDto, context: ActorContext): Promise<SettingDto> {
     if (dto.cashAccountId !== undefined) await this.assertIsCashHead(dto.cashAccountId);
     if (dto.sanththaAccountId !== undefined) await this.assertIsSanththaHead(dto.sanththaAccountId);
+    if (dto.depositInterestAccountId !== undefined) {
+      await this.assertIsDepositInterestHead(dto.depositInterestAccountId);
+    }
 
     const written = await this.write('accounting', { ...dto }, context);
     this.accountingCache = null;
@@ -111,6 +128,18 @@ export class SettingsService {
       throw new BadRequestException('The sanththa head must be an income account');
     if (!account.isPostable) throw new BadRequestException('The sanththa head must accept entries');
     if (!account.isActive) throw new BadRequestException('The sanththa head must be active');
+  }
+
+  private async assertIsDepositInterestHead(accountId: number): Promise<void> {
+    const account = await this.prisma.account.findUnique({ where: { id: accountId } });
+
+    if (!account) throw new BadRequestException(`Account ${accountId} was not found`);
+    if (account.type !== 'income')
+      throw new BadRequestException('The deposit interest head must be an income account');
+    if (!account.isPostable)
+      throw new BadRequestException('The deposit interest head must accept entries');
+    if (!account.isActive)
+      throw new BadRequestException('The deposit interest head must be active');
   }
 
   private async write(
