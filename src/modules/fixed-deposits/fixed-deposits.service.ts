@@ -409,11 +409,32 @@ export class FixedDepositsService {
   async slotOptions(): Promise<SlotOptionDto[]> {
     const slots = await this.prisma.eventSlot.findMany({
       where: { isActive: true },
-      include: { eventType: true },
+      include: {
+        eventType: true,
+        sponsors: {
+          where: { party: { isActive: true } },
+          include: { party: { select: { nameTa: true } } },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
       orderBy: [{ eventType: { nameTa: 'asc' } }, { instanceIdentifier: 'asc' }],
     });
 
-    return slots.map((slot) => ({ id: slot.id, poojaName: poojaNameOf(slot) }));
+    return slots.map((slot) => ({
+      id: slot.id,
+      poojaName: poojaNameOf(slot),
+      poojaTypeId: slot.eventTypeId,
+      poojaTypeName: slot.eventType.nameTa,
+      slotName:
+        slot.eventType.noOfInstances > 1
+          ? describeInstance(
+              slot.eventType.frequencyType,
+              slot.instanceIdentifier,
+              slot.customInstanceName,
+            )
+          : null,
+      sponsorName: slot.sponsors.map((sponsor) => sponsor.party.nameTa).join(', ') || null,
+    }));
   }
 
   private async renewalChain(id: number): Promise<{ id: number; certificateNo: string }[]> {

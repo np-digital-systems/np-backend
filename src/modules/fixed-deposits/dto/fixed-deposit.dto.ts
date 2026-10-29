@@ -207,7 +207,12 @@ export class DepositInterestDto {
 
 export class SlotOptionDto {
   @ApiProperty() id!: number;
-  @ApiProperty() poojaName!: string;
+  @ApiProperty({ description: 'Pooja type and slot together' }) poojaName!: string;
+  @ApiProperty() poojaTypeId!: number;
+  @ApiProperty() poojaTypeName!: string;
+  @ApiProperty({ nullable: true, description: 'Null when the pooja type has a single slot' })
+  slotName!: string | null;
+  @ApiProperty({ nullable: true }) sponsorName!: string | null;
 }
 
 class PoojaFundingRowDto {
