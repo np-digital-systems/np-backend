@@ -22,7 +22,7 @@ import {
 import { PaginationQueryDto } from '../../../common/dto/pagination.dto';
 import { VoucherStatusWire } from '../../../common/enums/wire';
 import type { WireVoucherStatus } from '../../../common/enums/wire';
-import { PaymentMode, VoucherKind } from '../../../generated/prisma/enums';
+import { EntrySide, PaymentMode, VoucherKind } from '../../../generated/prisma/enums';
 import { AccountRefDto } from '../../accounts/dto/account.dto';
 import { BankAccountRefDto } from '../../bank-accounts/dto/bank-account.dto';
 import { FundRefDto } from '../../funds/dto/fund.dto';
@@ -46,14 +46,17 @@ class VoucherLineDto {
   eventId!: number | null;
   @ApiProperty({ nullable: true, description: 'The deposit whose interest this line receipts' })
   fixedDepositId!: number | null;
+  @ApiProperty({ enum: EntrySide, nullable: true, description: 'Journal lines only' })
+  side!: EntrySide | null;
   @ApiProperty({ type: AccountRefDto }) account!: AccountRefDto;
   @ApiProperty({ type: FundRefDto }) fund!: FundRefDto;
   @ApiProperty({ type: ProjectRefDto, nullable: true }) project!: ProjectRefDto | null;
 }
 
-// No debit/credit side: it follows from the voucher kind. The cash/bank contra is generated on posting.
+// Only a journal line states its side; on every other kind it follows from the kind, and the cash/bank
+// contra is generated on posting. A contra's single line is the cash or bank head the money went to.
 export class WriteVoucherLineDto {
-  @ApiProperty({ description: 'The income or expense head this line hits' })
+  @ApiProperty({ description: 'The head this line hits' })
   @Type(() => Number)
   @IsInt()
   @Min(1)
@@ -100,6 +103,11 @@ export class WriteVoucherLineDto {
   @IsInt()
   @Min(1)
   fixedDepositId?: number | null;
+
+  @ApiPropertyOptional({ enum: EntrySide, description: 'Required on a journal, refused elsewhere' })
+  @IsOptional()
+  @IsEnum(EntrySide)
+  side?: EntrySide | null;
 }
 
 class VoucherDto {
@@ -115,7 +123,8 @@ class VoucherDto {
   lines!: VoucherLineDto[];
   @ApiProperty({ nullable: true, description: 'Who the entry was with' })
   partyId!: number | null;
-  @ApiProperty({ enum: PaymentMode }) mode!: PaymentMode;
+  @ApiProperty({ enum: PaymentMode, nullable: true, description: 'Null for a journal' })
+  mode!: PaymentMode | null;
   @ApiProperty({ nullable: true }) bankAccountId!: number | null;
   @ApiProperty({ nullable: true }) chequeNo!: string | null;
   @ApiProperty({ description: 'Payer for a receipt, payee for a payment' }) party!: string;
@@ -169,9 +178,14 @@ export class CreateVoucherDto {
   @Min(1)
   partyId?: number;
 
-  @ApiProperty({ enum: PaymentMode, description: 'Decides the contra side of the entry' })
+  @ApiPropertyOptional({
+    enum: PaymentMode,
+    description:
+      'Decides the cash or bank side of the entry; on a contra, the side the money left. Required on every kind but a journal',
+  })
+  @IsOptional()
   @IsEnum(PaymentMode)
-  mode!: PaymentMode;
+  mode?: PaymentMode;
 
   @ApiPropertyOptional({ description: 'Required for every mode except cash' })
   @IsOptional()

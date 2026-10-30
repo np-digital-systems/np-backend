@@ -28,7 +28,12 @@ import {
   VoucherRecordDto,
   WriteVoucherLineDto,
 } from './dto/voucher.dto';
-import { buildPostingLines, movesThroughBank, sumLines } from './voucher-posting';
+import {
+  buildPostingLines,
+  journalIsBalanced,
+  movesThroughBank,
+  voucherTotal,
+} from './voucher-posting';
 
 const VOUCHER_INCLUDE = {
   lines: {
@@ -50,6 +55,20 @@ const EDITABLE: VoucherStatus[] = [
   VoucherStatus.Rejected,
 ];
 const CANCELLABLE: VoucherStatus[] = [VoucherStatus.Draft, VoucherStatus.PendingApproval];
+
+const PREFIX: Record<VoucherKind, string> = {
+  receipt: 'RV',
+  payment: 'PV',
+  contra: 'CV',
+  journal: 'JV',
+};
+
+// Cash and bank heads are never named on a receipt, payment or journal: they only move through the
+// generated contra side or a contra voucher, which is what keeps the cash and bank books complete.
+const HEADS_FOR: Record<'receipt' | 'payment', readonly AccountType[]> = {
+  receipt: [AccountType.income, AccountType.asset, AccountType.liability, AccountType.equity],
+  payment: [AccountType.expense, AccountType.asset, AccountType.liability, AccountType.equity],
+};
 
 @Injectable()
 export class VouchersService {
@@ -138,8 +157,8 @@ export class VouchersService {
         financialYearId: year.id,
         date,
         description: dto.description,
-        amount: sumLines(dto.lines),
-        mode: dto.mode,
+        amount: voucherTotal(dto.kind, dto.lines),
+        mode: dto.mode ?? null,
         bankAccountId: dto.bankAccountId,
         chequeNo: dto.chequeNo,
         partyId: dto.partyId,
@@ -182,6 +201,13 @@ export class VouchersService {
     this.assertMayAct(before, context, canSeeAll);
     this.assertStatusIn(before, EDITABLE, 'edited');
 
+    // The reference was numbered in the kind's own sequence.
+    if (dto.kind !== before.kind) {
+      throw new BadRequestException(
+        `${before.ref} is a ${before.kind}; cancel it and raise a ${dto.kind} instead`,
+      );
+    }
+
     const date = new Date(dto.date);
     const year = await this.years.resolveOpenYear(date);
 
@@ -198,8 +224,8 @@ export class VouchersService {
           financialYearId: year.id,
           date,
           description: dto.description,
-          amount: sumLines(dto.lines),
-          mode: dto.mode,
+          amount: voucherTotal(dto.kind, dto.lines),
+          mode: dto.mode ?? null,
           bankAccountId: dto.bankAccountId ?? null,
           chequeNo: dto.chequeNo ?? null,
           partyId: dto.partyId ?? null,
@@ -339,9 +365,10 @@ export class VouchersService {
     this.assertStatusIn(voucher, [VoucherStatus.Approved], 'posted');
     await this.years.resolveOpenYear(voucher.date);
 
-    const contraAccountId = movesThroughBank(voucher.mode)
-      ? (await this.bankAccounts.assertUsable(voucher.bankAccountId!)).ledgerAccountId
-      : await this.settings.cashAccountId();
+    const [contraAccountId, moneyHeads] = await Promise.all([
+      this.sourceHeadOf(voucher),
+      this.moneyHeads(),
+    ]);
 
     const lines = buildPostingLines({
       kind: voucher.kind,
@@ -353,6 +380,9 @@ export class VouchersService {
         activityId: line.activityId,
         eventId: line.eventId,
         fixedDepositId: line.fixedDepositId,
+        side: line.side,
+        bankAccountId:
+          voucher.kind === VoucherKind.contra ? (moneyHeads.get(line.accountId) ?? null) : null,
       })),
       contraAccountId,
       bankAccountId: voucher.bankAccountId,
@@ -430,7 +460,7 @@ export class VouchersService {
     kind: VoucherKind,
     year: number,
   ): Promise<string> {
-    const prefix = kind === VoucherKind.receipt ? 'RV' : 'PV';
+    const prefix = PREFIX[kind];
 
     const [row] = await this.prisma.$queryRaw<{ prefix: string; allocated: number }[]>`
       INSERT INTO voucher_sequences (financial_year_id, kind, prefix, next_no)
@@ -453,20 +483,65 @@ export class VouchersService {
       activityId: line.activityId ?? null,
       eventId: line.eventId ?? null,
       fixedDepositId: line.fixedDepositId ?? null,
+      side: line.side ?? null,
     }));
   }
 
+  // The cash or bank head the money left (or arrived) through; a journal has none.
+  private async sourceHeadOf(voucher: VoucherRow): Promise<number | null> {
+    if (voucher.mode === null) return null;
+    if (!movesThroughBank(voucher.mode)) return this.settings.cashAccountId();
+
+    if (voucher.bankAccountId === null) {
+      throw new ConflictException(`${voucher.ref} names no bank account to post through`);
+    }
+
+    return (await this.bankAccounts.assertUsable(voucher.bankAccountId)).ledgerAccountId;
+  }
+
+  // Cash and bank heads, mapped to their bank account (null for the cash head).
+  private async moneyHeads(): Promise<Map<number, number | null>> {
+    const [{ cashAccountId }, banks] = await Promise.all([
+      this.settings.accounting(),
+      this.prisma.bankAccount.findMany({ select: { id: true, ledgerAccountId: true } }),
+    ]);
+
+    const heads = new Map<number, number | null>(
+      banks.map((bank) => [bank.ledgerAccountId, bank.id]),
+    );
+
+    if (cashAccountId !== null) heads.set(cashAccountId, null);
+
+    return heads;
+  }
+
   private async validateCoding(dto: CreateVoucherDto): Promise<void> {
-    const expected = dto.kind === VoucherKind.receipt ? AccountType.income : AccountType.expense;
+    this.assertShape(dto);
+
+    const moneyHeads = await this.moneyHeads();
 
     // Every line is validated; one bad line rejects the whole voucher.
     for (const [index, line] of dto.lines.entries()) {
       const where = dto.lines.length > 1 ? ` on line ${index + 1}` : '';
       const account = await this.accounts.assertPostable(line.accountId);
+      const isMoneyHead = moneyHeads.has(account.id);
 
-      if (account.type !== expected) {
+      if (dto.kind === VoucherKind.contra) {
+        if (!isMoneyHead) {
+          throw new BadRequestException(
+            `A contra moves money to a cash or bank account; ${account.code} is neither`,
+          );
+        }
+
+        const bankAccountId = moneyHeads.get(account.id);
+        if (bankAccountId) await this.bankAccounts.assertUsable(bankAccountId);
+      } else if (isMoneyHead) {
         throw new BadRequestException(
-          `A ${dto.kind} must name an ${expected} head${where}; ${account.code} is ${account.type}`,
+          `${account.code} is a cash or bank head${where}; move money between those with a contra voucher`,
+        );
+      } else if (dto.kind !== VoucherKind.journal && !HEADS_FOR[dto.kind].includes(account.type)) {
+        throw new BadRequestException(
+          `A ${dto.kind} cannot name an ${account.type} head${where}; ${account.code} is ${account.type}`,
         );
       }
 
@@ -494,14 +569,10 @@ export class VouchersService {
       }
 
       if (line.fixedDepositId) {
-        if (dto.kind !== VoucherKind.receipt) {
-          throw new BadRequestException(`Only a receipt can carry deposit interest${where}`);
-        }
-
         // Interest is read through the deposit's slot; an event too would count it twice for the pooja.
         if (line.eventId) {
           throw new BadRequestException(
-            `A deposit interest line cannot also name an occurrence${where}`,
+            `A fixed deposit line cannot also name an occurrence${where}`,
           );
         }
 
@@ -522,6 +593,8 @@ export class VouchersService {
       if (!party.isActive) throw new BadRequestException(`${party.nameTa} is no longer active`);
     }
 
+    if (dto.mode === undefined) return;
+
     if (movesThroughBank(dto.mode)) {
       if (!dto.bankAccountId) {
         throw new BadRequestException(
@@ -529,13 +602,79 @@ export class VouchersService {
         );
       }
 
-      await this.bankAccounts.assertUsable(dto.bankAccountId);
+      const bank = await this.bankAccounts.assertUsable(dto.bankAccountId);
 
       if (dto.mode === PaymentMode.cheque && !dto.chequeNo) {
         throw new BadRequestException('A cheque voucher must carry the cheque number');
       }
-    } else if (dto.bankAccountId) {
-      throw new BadRequestException('A cash voucher cannot name a bank account');
+
+      if (dto.kind === VoucherKind.contra && dto.lines[0].accountId === bank.ledgerAccountId) {
+        throw new BadRequestException('A contra must move money to a different account');
+      }
+    } else {
+      if (dto.bankAccountId) {
+        throw new BadRequestException('A cash voucher cannot name a bank account');
+      }
+
+      if (
+        dto.kind === VoucherKind.contra &&
+        dto.lines[0].accountId === (await this.settings.cashAccountId())
+      ) {
+        throw new BadRequestException('A contra must move money to a different account');
+      }
+    }
+  }
+
+  // The rules that need no lookups: how many lines, which carry a side, and whether money moves.
+  private assertShape(dto: CreateVoucherDto): void {
+    const sided = dto.lines.filter((line) => line.side).length;
+
+    if (dto.kind === VoucherKind.journal) {
+      if (dto.lines.length < 2) {
+        throw new BadRequestException('A journal needs at least one debit and one credit line');
+      }
+
+      if (sided !== dto.lines.length) {
+        throw new BadRequestException(
+          'Every journal line must say whether it is a debit or a credit',
+        );
+      }
+
+      if (!journalIsBalanced(dto.lines)) {
+        throw new BadRequestException('A journal must balance: its debits must equal its credits');
+      }
+
+      if (dto.mode !== undefined || dto.bankAccountId || dto.chequeNo) {
+        throw new BadRequestException(
+          'A journal moves no money, so it takes no mode, bank account or cheque',
+        );
+      }
+
+      return;
+    }
+
+    if (sided > 0) {
+      throw new BadRequestException(
+        `Only journal lines carry a debit or credit side; a ${dto.kind}'s side follows from its kind`,
+      );
+    }
+
+    if (dto.mode === undefined) {
+      throw new BadRequestException(`A ${dto.kind} must say how the money moved`);
+    }
+
+    if (dto.kind === VoucherKind.contra) {
+      if (dto.lines.length !== 1) {
+        throw new BadRequestException('A contra moves money to exactly one account');
+      }
+
+      const [line] = dto.lines;
+
+      if (line.projectId || line.activityId || line.eventId || line.fixedDepositId) {
+        throw new BadRequestException(
+          'A contra only moves money; it carries no project, activity, occurrence or deposit',
+        );
+      }
     }
   }
 
@@ -606,6 +745,7 @@ export class VouchersService {
         activityId: line.activityId,
         eventId: line.eventId,
         fixedDepositId: line.fixedDepositId,
+        side: line.side,
         account: toAccountRef(line.account),
         fund: toFundRef(line.fund),
         project: line.project ? toProjectRef(line.project) : null,
