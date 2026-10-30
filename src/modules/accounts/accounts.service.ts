@@ -13,8 +13,10 @@ import { AccountType } from '../../generated/prisma/enums';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { LedgerQueryService, Sides } from '../ledger/ledger-query.service';
+import { SettingsService } from '../settings/settings.service';
 import {
   AccountRecordDto,
+  type MoneyHead,
   AccountRefDto,
   CreateAccountDto,
   QueryAccountsDto,
@@ -43,6 +45,7 @@ export class AccountsService {
     private readonly prisma: PrismaService,
     private readonly ledger: LedgerQueryService,
     private readonly audit: AuditService,
+    private readonly settings: SettingsService,
   ) {}
 
   async findMany(query: QueryAccountsDto): Promise<AccountRecordDto[]> {
@@ -63,9 +66,14 @@ export class AccountsService {
       orderBy: { code: 'asc' },
     });
 
-    const sides = await this.ledger.byAccount(query.financialYearId);
+    const [sides, moneyHeads] = await Promise.all([
+      this.ledger.byAccount(query.financialYearId),
+      this.moneyHeads(),
+    ]);
 
-    return accounts.map((account) => this.toRecord(account, account.parent, sides.get(account.id)));
+    return accounts.map((account) =>
+      this.toRecord(account, account.parent, sides.get(account.id), moneyHeads),
+    );
   }
 
   async findOneOrFail(id: number, financialYearId?: number): Promise<AccountRecordDto> {
@@ -76,9 +84,12 @@ export class AccountsService {
 
     if (!account) throw new NotFoundException(`Account ${id} was not found`);
 
-    const sides = await this.ledger.forAccount(id, financialYearId);
+    const [sides, moneyHeads] = await Promise.all([
+      this.ledger.forAccount(id, financialYearId),
+      this.moneyHeads(),
+    ]);
 
-    return this.toRecord(account, account.parent, sides);
+    return this.toRecord(account, account.parent, sides, moneyHeads);
   }
 
   /** Throws unless the account exists, is active and may be posted against. */
@@ -126,7 +137,7 @@ export class AccountsService {
       summary: `Created ${account.type} account ${account.code} ${account.nameTa}`,
     });
 
-    return this.toRecord(account, account.parent, undefined);
+    return this.toRecord(account, account.parent, undefined, await this.moneyHeads());
   }
 
   async update(
@@ -240,10 +251,26 @@ export class AccountsService {
     }
   }
 
+  private async moneyHeads(): Promise<Map<number, MoneyHead>> {
+    const [{ cashAccountId }, banks] = await Promise.all([
+      this.settings.accounting(),
+      this.prisma.bankAccount.findMany({ select: { ledgerAccountId: true } }),
+    ]);
+
+    const heads = new Map<number, MoneyHead>(
+      banks.map((bank) => [bank.ledgerAccountId, 'bank' as const]),
+    );
+
+    if (cashAccountId !== null) heads.set(cashAccountId, 'cash');
+
+    return heads;
+  }
+
   private toRecord(
     account: AccountRow,
     parent: AccountRow | null,
     sides: Sides | undefined,
+    moneyHeads: Map<number, MoneyHead>,
   ): AccountRecordDto {
     const totals = sides ?? LedgerQueryService.empty();
     const opening = toRupees(account.openingBalance);
@@ -259,6 +286,7 @@ export class AccountsService {
       parent: parent ? toAccountRef(parent) : null,
       entryCount: totals.count,
       balance: naturalBalance(account.type, opening, totals.debit, totals.credit),
+      moneyHead: moneyHeads.get(account.id) ?? null,
     };
   }
 }

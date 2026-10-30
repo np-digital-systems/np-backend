@@ -14,6 +14,8 @@ import {
 
 import { AccountType } from '../../../generated/prisma/enums';
 
+export type MoneyHead = 'cash' | 'bank';
+
 export class AccountRefDto {
   @ApiProperty() id!: number;
   @ApiProperty() code!: string;
@@ -41,6 +43,12 @@ export class AccountRecordDto extends AccountDto {
   @ApiProperty({ description: 'Posted ledger entries in the active year' }) entryCount!: number;
   @ApiProperty({ description: 'Opening balance plus the year’s postings, derived from the ledger' })
   balance!: number;
+  @ApiProperty({
+    enum: ['cash', 'bank'],
+    nullable: true,
+    description: 'Cash and bank heads only move through the cash/bank side or a contra voucher',
+  })
+  moneyHead!: MoneyHead | null;
 }
 
 export class CreateAccountDto {
