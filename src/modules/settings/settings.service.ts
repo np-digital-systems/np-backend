@@ -15,6 +15,8 @@ const ACCOUNTING_DEFAULTS: AccountingSettings = {
   cashAccountId: null,
   sanththaAccountId: null,
   depositInterestAccountId: null,
+  depositAccountId: null,
+  endowmentAccountId: null,
   allowSelfApproval: false,
   depositMaturityAlertDays: 30,
 };
@@ -97,11 +99,41 @@ export class SettingsService {
     return depositInterestAccountId;
   }
 
+  /** The asset head deposit principal sits on, or a clear error explaining how to configure one. */
+  async depositAccountId(): Promise<number> {
+    const { depositAccountId } = await this.accounting();
+
+    if (depositAccountId === null) {
+      throw new BadRequestException(
+        'No fixed deposit head is configured. Set accounting.depositAccountId to the asset head deposits are carried on.',
+      );
+    }
+
+    return depositAccountId;
+  }
+
+  /** The equity head sponsor-placed deposits are credited to, or a clear error explaining how to configure one. */
+  async endowmentAccountId(): Promise<number> {
+    const { endowmentAccountId } = await this.accounting();
+
+    if (endowmentAccountId === null) {
+      throw new BadRequestException(
+        'No endowment head is configured. Set accounting.endowmentAccountId to the equity head sponsor-placed deposits are credited to.',
+      );
+    }
+
+    return endowmentAccountId;
+  }
+
   async updateAccounting(dto: AccountingSettingsDto, context: ActorContext): Promise<SettingDto> {
     if (dto.cashAccountId !== undefined) await this.assertIsCashHead(dto.cashAccountId);
     if (dto.sanththaAccountId !== undefined) await this.assertIsSanththaHead(dto.sanththaAccountId);
     if (dto.depositInterestAccountId !== undefined) {
       await this.assertIsDepositInterestHead(dto.depositInterestAccountId);
+    }
+    if (dto.depositAccountId !== undefined) await this.assertIsDepositHead(dto.depositAccountId);
+    if (dto.endowmentAccountId !== undefined) {
+      await this.assertIsHead(dto.endowmentAccountId, 'equity', 'The endowment head');
     }
 
     const written = await this.write('accounting', { ...dto }, context);
@@ -128,6 +160,35 @@ export class SettingsService {
       throw new BadRequestException('The sanththa head must be an income account');
     if (!account.isPostable) throw new BadRequestException('The sanththa head must accept entries');
     if (!account.isActive) throw new BadRequestException('The sanththa head must be active');
+  }
+
+  // A cash or bank head would put deposits in the cash or bank book.
+  private async assertIsDepositHead(accountId: number): Promise<void> {
+    await this.assertIsHead(accountId, 'asset', 'The fixed deposit head');
+
+    const [{ cashAccountId }, bank] = await Promise.all([
+      this.accounting(),
+      this.prisma.bankAccount.findUnique({ where: { ledgerAccountId: accountId } }),
+    ]);
+
+    if (accountId === cashAccountId || bank) {
+      throw new BadRequestException('The fixed deposit head cannot be a cash or bank head');
+    }
+  }
+
+  private async assertIsHead(
+    accountId: number,
+    type: 'asset' | 'equity',
+    label: string,
+  ): Promise<void> {
+    const account = await this.prisma.account.findUnique({ where: { id: accountId } });
+
+    if (!account) throw new BadRequestException(`Account ${accountId} was not found`);
+    if (account.type !== type) {
+      throw new BadRequestException(`${label} must be an ${type} account`);
+    }
+    if (!account.isPostable) throw new BadRequestException(`${label} must accept entries`);
+    if (!account.isActive) throw new BadRequestException(`${label} must be active`);
   }
 
   private async assertIsDepositInterestHead(accountId: number): Promise<void> {

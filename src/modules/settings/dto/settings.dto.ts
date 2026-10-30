@@ -38,6 +38,24 @@ export class AccountingSettingsDto {
   depositInterestAccountId?: number;
 
   @ApiPropertyOptional({
+    description: 'The asset head fixed deposit principal is carried on',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  depositAccountId?: number;
+
+  @ApiPropertyOptional({
+    description: 'The equity head credited when a sponsor places a deposit in the temple’s name',
+  })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  endowmentAccountId?: number;
+
+  @ApiPropertyOptional({
     default: false,
     description:
       'Whether the person who raised a voucher may also approve it. Off by default: approval is a second pair of eyes.',
@@ -65,6 +83,8 @@ export interface AccountingSettings {
   cashAccountId: number | null;
   sanththaAccountId: number | null;
   depositInterestAccountId: number | null;
+  depositAccountId: number | null;
+  endowmentAccountId: number | null;
   allowSelfApproval: boolean;
   depositMaturityAlertDays: number;
 }
