@@ -17,7 +17,22 @@ import {
 
 import { InterestPayoutWire } from '../../../common/enums/wire';
 import type { WireInterestPayout } from '../../../common/enums/wire';
-import { DepositStatus, PaymentMode } from '../../../generated/prisma/enums';
+import { DepositSource, DepositStatus, PaymentMode } from '../../../generated/prisma/enums';
+
+// `renewal` is only ever set by renewing.
+const PLACEMENT_SOURCES = [
+  DepositSource.bank,
+  DepositSource.endowment,
+  DepositSource.opening,
+] as const;
+
+type PlacementSource = (typeof PLACEMENT_SOURCES)[number];
+
+class VoucherRefDto {
+  @ApiProperty() id!: number;
+  @ApiProperty() ref!: string;
+  @ApiProperty() status!: string;
+}
 
 export class DepositRecordDto {
   @ApiProperty() id!: number;
@@ -35,6 +50,9 @@ export class DepositRecordDto {
   @ApiProperty({ nullable: true, description: 'Null for a kovil deposit' }) slotId!: number | null;
   @ApiProperty({ nullable: true }) poojaName!: string | null;
   @ApiProperty({ nullable: true }) bankAccountId!: number | null;
+  @ApiProperty({ enum: DepositSource }) source!: DepositSource;
+  @ApiProperty({ type: VoucherRefDto, nullable: true }) placementVoucher!: VoucherRefDto | null;
+  @ApiProperty({ type: VoucherRefDto, nullable: true }) closureVoucher!: VoucherRefDto | null;
   @ApiProperty({ enum: DepositStatus }) status!: DepositStatus;
   @ApiProperty({ nullable: true }) renewedFromId!: number | null;
   @ApiProperty({ nullable: true }) notes!: string | null;
@@ -45,6 +63,12 @@ export class DepositRecordDto {
   @ApiProperty() isMaturingSoon!: boolean;
   @ApiProperty() isOverdue!: boolean;
   @ApiProperty({ description: 'Posted interest receipts, all years' }) interestReceived!: number;
+  @ApiProperty({ description: 'Posted principal on the deposit head, opening balance included' })
+  bookBalance!: number;
+  @ApiProperty({
+    description: 'Book balance less what the register says is held; non-zero until vouchers post',
+  })
+  bookDifference!: number;
 }
 
 export class CreateFixedDepositDto {
@@ -120,17 +144,67 @@ export class CreateFixedDepositDto {
   @IsString()
   @MaxLength(1000)
   notes?: string;
+
+  @ApiProperty({
+    enum: PLACEMENT_SOURCES,
+    description:
+      'bank: the temple paid it in (a payment); endowment: a sponsor placed it in the temple’s name (a journal); opening: already held at go-live (no entry)',
+  })
+  @IsIn(PLACEMENT_SOURCES)
+  source!: PlacementSource;
+
+  @ApiPropertyOptional({
+    enum: PaymentMode,
+    description: 'How the principal was paid in; bank only',
+  })
+  @IsOptional()
+  @IsEnum(PaymentMode)
+  mode?: PaymentMode;
+
+  @ApiPropertyOptional({ description: 'The account the principal left; bank only, unless cash' })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  fromBankAccountId?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  chequeNo?: string;
+
+  @ApiPropertyOptional({ description: 'The paper voucher number; required unless opening' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  manualVoucherNo?: string;
 }
 
+const PLACEMENT_FIELDS = [
+  'source',
+  'mode',
+  'fromBankAccountId',
+  'chequeNo',
+  'manualVoucherNo',
+] as const;
+
 export class UpdateFixedDepositDto extends PartialType(
-  OmitType(CreateFixedDepositDto, ['certificateNo'] as const),
+  OmitType(CreateFixedDepositDto, ['certificateNo', ...PLACEMENT_FIELDS] as const),
 ) {}
 
 // Fund and pooja carry over from the certificate being renewed.
 export class RenewDepositDto extends OmitType(CreateFixedDepositDto, [
   'fundId',
   'slotId',
-] as const) {}
+  ...PLACEMENT_FIELDS,
+] as const) {
+  @ApiProperty({ description: 'The paper voucher number for the renewal journal' })
+  @IsString()
+  @IsNotEmpty({ message: 'The manual voucher number is required' })
+  @MaxLength(60)
+  manualVoucherNo!: string;
+}
 
 export class QueryDepositsDto {
   @ApiPropertyOptional({ enum: DepositStatus })
@@ -190,6 +264,8 @@ export class RecordInterestDto {
   @MaxLength(2000)
   notes?: string;
 }
+
+export class CloseDepositDto extends RecordInterestDto {}
 
 class DepositInterestYearDto {
   @ApiProperty() financialYearId!: number;

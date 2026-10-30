@@ -31,6 +31,29 @@ export class TrialBalanceDto {
   @ApiProperty({ description: 'True when both sides agree, as they must' }) balanced!: boolean;
 }
 
+export class BalanceLineDto {
+  @ApiProperty({ type: AccountRefDto }) account!: AccountRefDto;
+  @ApiProperty() amount!: number;
+}
+
+export class BalanceSheetDto {
+  @ApiProperty({ description: 'The last day of the financial year' }) asOf!: string;
+  @ApiProperty() financialYearLabel!: string;
+  @ApiProperty({ type: BalanceLineDto, isArray: true }) assets!: BalanceLineDto[];
+  @ApiProperty({ type: BalanceLineDto, isArray: true }) liabilities!: BalanceLineDto[];
+  @ApiProperty({ type: BalanceLineDto, isArray: true }) equity!: BalanceLineDto[];
+  @ApiProperty({ description: 'Income less expenditure, every year to date' })
+  accumulatedSurplus!: number;
+  @ApiProperty() totalAssets!: number;
+  @ApiProperty({ description: 'Liabilities, equity and the accumulated surplus' })
+  totalLiabilitiesAndEquity!: number;
+  @ApiProperty({
+    description: 'Opening balances that were entered on one side only; nil when they agree',
+  })
+  openingDifference!: number;
+  @ApiProperty({ description: 'True when the two sides agree, as they must' }) balanced!: boolean;
+}
+
 export class AccountingSummaryDto {
   @ApiProperty() income!: number;
   @ApiProperty() expenses!: number;

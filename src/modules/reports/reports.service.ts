@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
 
 import { isDebitNatured } from '../../common/money/account-direction';
 import { share, toRupees } from '../../common/money/money';
@@ -12,6 +12,8 @@ import { LedgerQueryService } from '../ledger/ledger-query.service';
 import { SettingsService } from '../settings/settings.service';
 import {
   AccountingSummaryDto,
+  BalanceLineDto,
+  BalanceSheetDto,
   FinanceSummaryDto,
   IncomeStatementDto,
   StatementLineDto,
@@ -111,6 +113,85 @@ export class ReportsService {
       totalIncome: round(totalIncome),
       totalExpenses: round(totalExpenses),
       surplus: round(totalIncome - totalExpenses),
+    };
+  }
+
+  // Cumulative, not one year's movement: a balance sheet is every posted entry up to the year's end on
+  // top of the go-live openings. Year close posts no closing entries, so the surplus is derived here.
+  async balanceSheet(financialYearId?: number): Promise<BalanceSheetDto> {
+    const yearId = await this.resolveYear(financialYearId);
+    const year = yearId
+      ? await this.prisma.financialYear.findUnique({ where: { id: yearId } })
+      : null;
+
+    if (!year) throw new NotFoundException('No financial year is marked current');
+
+    const rows = await this.prisma.ledgerEntry.groupBy({
+      by: ['accountId'],
+      where: {
+        voucher: { status: VoucherStatus.Posted },
+        date: { lte: year.endsOn },
+      },
+      _sum: { debit: true, credit: true },
+    });
+
+    const sides = new Map(
+      rows.map((row) => [row.accountId, toRupees(row._sum.debit) - toRupees(row._sum.credit)]),
+    );
+
+    const accounts = await this.prisma.account.findMany({
+      where: { OR: [{ id: { in: [...sides.keys()] } }, { openingBalance: { not: 0 } }] },
+      orderBy: { code: 'asc' },
+    });
+
+    const assets: BalanceLineDto[] = [];
+    const liabilities: BalanceLineDto[] = [];
+    const equity: BalanceLineDto[] = [];
+    let accumulatedSurplus = 0;
+    let openingDifference = 0;
+
+    for (const account of accounts) {
+      // Debit-positive movement; each head is then shown on its natural side.
+      const movement = sides.get(account.id) ?? 0;
+      const opening = toRupees(account.openingBalance);
+
+      if (account.type === AccountType.income || account.type === AccountType.expense) {
+        accumulatedSurplus -= movement;
+        continue;
+      }
+
+      const debitNatured = isDebitNatured(account.type);
+      const amount = round(debitNatured ? opening + movement : opening - movement);
+
+      openingDifference += debitNatured ? opening : -opening;
+
+      if (amount === 0) continue;
+
+      const line = { account: toAccountRef(account), amount };
+
+      if (account.type === AccountType.asset) assets.push(line);
+      else if (account.type === AccountType.liability) liabilities.push(line);
+      else equity.push(line);
+    }
+
+    const total = (lines: BalanceLineDto[]) => lines.reduce((sum, line) => sum + line.amount, 0);
+    const totalAssets = round(total(assets));
+    const totalLiabilitiesAndEquity = round(
+      total(liabilities) + total(equity) + accumulatedSurplus,
+    );
+
+    return {
+      asOf: year.endsOn.toISOString().slice(0, 10),
+      financialYearLabel: year.label,
+      assets,
+      liabilities,
+      equity,
+      accumulatedSurplus: round(accumulatedSurplus),
+      totalAssets,
+      totalLiabilitiesAndEquity,
+      openingDifference: round(openingDifference),
+      // Posted entries always balance, so any gap is exactly the opening difference.
+      balanced: Math.abs(totalAssets - totalLiabilitiesAndEquity) < 0.005,
     };
   }
 

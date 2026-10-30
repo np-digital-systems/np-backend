@@ -5,11 +5,20 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 
+import { VoucherStatusWire } from '../../common/enums/wire';
 import { toRupees } from '../../common/money/money';
 import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
 import { InterestPayoutWire } from '../../common/enums/wire';
-import { AccountType, DepositStatus, PaymentMode, VoucherKind } from '../../generated/prisma/enums';
+import {
+  AccountType,
+  DepositSource,
+  DepositStatus,
+  EntrySide,
+  PaymentMode,
+  VoucherKind,
+  VoucherStatus,
+} from '../../generated/prisma/enums';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { LedgerQueryService } from '../ledger/ledger-query.service';
@@ -19,6 +28,7 @@ import { VoucherRecordDto } from '../vouchers/dto/voucher.dto';
 import { VouchersService } from '../vouchers/vouchers.service';
 import { depositMaths } from './deposit-maths';
 import {
+  CloseDepositDto,
   CreateFixedDepositDto,
   DepositInterestDto,
   DepositRecordDto,
@@ -32,18 +42,24 @@ import {
 } from './dto/fixed-deposit.dto';
 import { netExpense, netIncome, poojaFunding } from './pooja-funding';
 
+const VOUCHER_REF = { select: { id: true, ref: true, status: true } } as const;
+
 const DEPOSIT_INCLUDE = {
   fund: true,
   slot: { include: { eventType: true } },
+  placementVoucher: VOUCHER_REF,
+  closureVoucher: VOUCHER_REF,
 } satisfies Prisma.FixedDepositInclude;
+
+const SETTLED: DepositStatus[] = [DepositStatus.renewed, DepositStatus.closed];
 
 type DepositRow = Prisma.FixedDepositGetPayload<{ include: typeof DEPOSIT_INCLUDE }>;
 type SlotRow = NonNullable<DepositRow['slot']>;
 
-const describeInterest = (certificateNo: string, poojaName: string | null): string =>
-  poojaName
-    ? `நிலையான வைப்பு வட்டி — ${certificateNo} — ${poojaName}`
-    : `நிலையான வைப்பு வட்டி — ${certificateNo}`;
+const describe = (what: string, certificateNo: string, poojaName: string | null): string =>
+  poojaName ? `${what} — ${certificateNo} — ${poojaName}` : `${what} — ${certificateNo}`;
+
+const round = (value: number) => Math.round(value * 100) / 100;
 
 const poojaNameOf = (slot: SlotRow): string =>
   slot.eventType.noOfInstances > 1
@@ -67,13 +83,7 @@ export class FixedDepositsService {
       orderBy: { maturesOn: 'asc' },
     });
 
-    const [{ depositMaturityAlertDays }, interest] = await Promise.all([
-      this.settings.accounting(),
-      this.ledger.byDimensionAndType('fixedDepositId'),
-    ]);
-    const records = deposits.map((deposit) =>
-      this.toRecord(deposit, depositMaturityAlertDays, netIncome(interest.get(deposit.id))),
-    );
+    const records = await this.records(deposits);
 
     return query.maturingSoon ? records.filter((record) => record.isMaturingSoon) : records;
   }
@@ -86,22 +96,54 @@ export class FixedDepositsService {
 
     if (!deposit) throw new NotFoundException(`Fixed deposit ${id} was not found`);
 
-    const [{ depositMaturityAlertDays }, interest] = await Promise.all([
-      this.settings.accounting(),
-      this.ledger.byDimensionAndType('fixedDepositId'),
-    ]);
+    const [record] = await this.records([deposit]);
 
-    return this.toRecord(deposit, depositMaturityAlertDays, netIncome(interest.get(id)));
+    return record;
   }
 
+  // The deposit row and its placement voucher can't share a transaction (vouchers are raised through
+  // VouchersService), so everything is checked first and the row is removed if the voucher is refused.
   async create(dto: CreateFixedDepositDto, context: ActorContext): Promise<DepositRecordDto> {
     this.assertDates(dto.placedOn, dto.maturesOn);
+    this.assertPlacementFields(dto);
     await this.assertFundIsActive(dto.fundId);
     if (dto.slotId) await this.assertSlotIsActive(dto.slotId);
 
+    const depositAccountId =
+      dto.source === DepositSource.opening
+        ? (await this.settings.accounting()).depositAccountId
+        : await this.settings.depositAccountId();
+
+    const endowmentAccountId =
+      dto.source === DepositSource.endowment ? await this.settings.endowmentAccountId() : null;
+
     const deposit = await this.prisma.fixedDeposit.create({
-      data: this.dataFrom(dto, dto.fundId, dto.slotId ?? null),
+      data: {
+        ...this.dataFrom(dto, dto.fundId, dto.slotId ?? null),
+        source: dto.source,
+        ledgerAccountId: depositAccountId,
+      },
     });
+
+    if (depositAccountId !== null && dto.source !== DepositSource.opening) {
+      try {
+        const voucher = await this.raisePlacement(
+          deposit.id,
+          dto,
+          depositAccountId,
+          endowmentAccountId,
+          context,
+        );
+
+        await this.prisma.fixedDeposit.update({
+          where: { id: deposit.id },
+          data: { placementVoucherId: BigInt(voucher.id) },
+        });
+      } catch (error) {
+        await this.prisma.fixedDeposit.delete({ where: { id: deposit.id } });
+        throw error;
+      }
+    }
 
     await this.audit.record(context, {
       action: 'create',
@@ -128,6 +170,12 @@ export class FixedDepositsService {
     const placedOn = dto.placedOn ?? before.placedOn.toISOString().slice(0, 10);
     const maturesOn = dto.maturesOn ?? before.maturesOn.toISOString().slice(0, 10);
     this.assertDates(placedOn, maturesOn);
+
+    const movesBooks =
+      (dto.principal !== undefined && dto.principal !== toRupees(before.principal)) ||
+      placedOn !== before.placedOn.toISOString().slice(0, 10);
+
+    if (movesBooks) await this.assertPrincipalIsEditable(before.placementVoucherId);
     if (dto.slotId) await this.assertSlotIsActive(dto.slotId);
 
     const deposit = await this.prisma.fixedDeposit.update({
@@ -200,13 +248,94 @@ export class FixedDepositsService {
 
     this.assertDates(dto.placedOn, dto.maturesOn);
 
+    const previousPrincipal = toRupees(previous.principal);
+
+    if (dto.principal < previousPrincipal) {
+      throw new BadRequestException(
+        'A renewal cannot reduce the principal; close the deposit and place a new one',
+      );
+    }
+
+    const depositAccountId = previous.ledgerAccountId ?? (await this.settings.depositAccountId());
+    const addedInterest = round(dto.principal - previousPrincipal);
+    const interestAccountId =
+      addedInterest > 0 ? await this.settings.depositInterestAccountId() : null;
+
     const renewal = await this.prisma.$transaction(async (tx) => {
       await tx.fixedDeposit.update({ where: { id }, data: { status: DepositStatus.renewed } });
 
       return tx.fixedDeposit.create({
-        data: { ...this.dataFrom(dto, previous.fundId, previous.slotId), renewedFromId: id },
+        data: {
+          ...this.dataFrom(dto, previous.fundId, previous.slotId),
+          renewedFromId: id,
+          source: DepositSource.renewal,
+          ledgerAccountId: depositAccountId,
+        },
       });
     });
+
+    // The journal moves the principal from the old certificate to the new one; interest the bank added
+    // to the principal is income. If it is refused, the renewal is undone.
+    try {
+      const coding = await this.codingFor(renewal.id);
+      const lines = [
+        {
+          accountId: depositAccountId,
+          amount: previousPrincipal,
+          fundId: previous.fundId,
+          fixedDepositId: id,
+          side: EntrySide.credit,
+        },
+        {
+          accountId: depositAccountId,
+          amount: dto.principal,
+          fundId: previous.fundId,
+          fixedDepositId: renewal.id,
+          side: EntrySide.debit,
+        },
+        ...(interestAccountId === null
+          ? []
+          : [
+              {
+                accountId: interestAccountId,
+                amount: addedInterest,
+                fundId: previous.fundId,
+                activityId: coding.activityId,
+                fixedDepositId: renewal.id,
+                side: EntrySide.credit,
+              },
+            ]),
+      ];
+
+      const voucher = await this.vouchers.raiseForApproval(
+        {
+          kind: VoucherKind.journal,
+          date: dto.placedOn,
+          description: describe(
+            'நிலையான வைப்பு புதுப்பிப்பு',
+            `${previous.certificateNo} → ${renewal.certificateNo}`,
+            coding.poojaName,
+          ),
+          party: coding.party ?? renewal.bankName,
+          partyId: coding.partyId,
+          manualVoucherNo: dto.manualVoucherNo,
+          notes: dto.notes,
+          lines,
+        },
+        context,
+      );
+
+      await this.prisma.fixedDeposit.update({
+        where: { id: renewal.id },
+        data: { placementVoucherId: BigInt(voucher.id) },
+      });
+    } catch (error) {
+      await this.prisma.$transaction([
+        this.prisma.fixedDeposit.delete({ where: { id: renewal.id } }),
+        this.prisma.fixedDeposit.update({ where: { id }, data: { status: previous.status } }),
+      ]);
+      throw error;
+    }
 
     await this.audit.record(context, {
       action: 'create',
@@ -224,56 +353,94 @@ export class FixedDepositsService {
     dto: RecordInterestDto,
     context: ActorContext,
   ): Promise<VoucherRecordDto> {
-    const deposit = await this.prisma.fixedDeposit.findUnique({
-      where: { id },
-      include: {
-        slot: {
-          include: {
-            eventType: { include: { activity: true } },
-            sponsors: { include: { party: true }, orderBy: { createdAt: 'asc' } },
-          },
-        },
-      },
-    });
-
-    if (!deposit) throw new NotFoundException(`Fixed deposit ${id} was not found`);
-
+    const coding = await this.codingFor(id);
     const accountId = await this.settings.depositInterestAccountId();
-
-    // Inactive ones are left off rather than letting the voucher's coding checks refuse the receipt.
-    const activity = deposit.slot?.eventType.activity;
-    const sponsor = deposit.slot?.sponsors.find((entry) => entry.party.isActive)?.party;
 
     return this.vouchers.raiseForApproval(
       {
+        ...this.moneyMovement(coding, dto),
         kind: VoucherKind.receipt,
-        date: dto.receivedOn,
-        description: describeInterest(
-          deposit.certificateNo,
-          deposit.slot ? poojaNameOf(deposit.slot) : null,
-        ),
-        mode: dto.mode,
-        bankAccountId:
-          dto.mode === PaymentMode.cash
-            ? undefined
-            : (dto.bankAccountId ?? deposit.bankAccountId ?? undefined),
-        chequeNo: dto.chequeNo,
-        party: sponsor?.nameTa ?? deposit.bankName,
-        partyId: sponsor?.id,
-        manualVoucherNo: dto.manualVoucherNo,
-        notes: dto.notes,
+        description: describe('நிலையான வைப்பு வட்டி', coding.certificateNo, coding.poojaName),
         lines: [
           {
             accountId,
             amount: dto.amount,
-            fundId: deposit.fundId,
-            activityId: activity?.isActive ? activity.id : undefined,
+            fundId: coding.fundId,
+            activityId: coding.activityId,
             fixedDepositId: id,
           },
         ],
       },
       context,
     );
+  }
+
+  // The principal comes back off the deposit head; anything paid above it is the final interest.
+  async close(id: number, dto: CloseDepositDto, context: ActorContext): Promise<DepositRecordDto> {
+    const before = await this.prisma.fixedDeposit.findUnique({ where: { id } });
+
+    if (!before) throw new NotFoundException(`Fixed deposit ${id} was not found`);
+    if (SETTLED.includes(before.status)) {
+      throw new ConflictException(`A ${before.status} deposit is settled and cannot be closed`);
+    }
+
+    const principal = toRupees(before.principal);
+
+    if (dto.amount < principal) {
+      throw new BadRequestException(
+        `The bank paid less than the ${principal} principal; a loss on early closure has to be recorded by the accountant with a journal`,
+      );
+    }
+
+    const finalInterest = round(dto.amount - principal);
+    const [depositAccountId, interestAccountId, coding] = await Promise.all([
+      before.ledgerAccountId ?? this.settings.depositAccountId(),
+      finalInterest > 0 ? this.settings.depositInterestAccountId() : null,
+      this.codingFor(id),
+    ]);
+
+    const voucher = await this.vouchers.raiseForApproval(
+      {
+        ...this.moneyMovement(coding, dto),
+        kind: VoucherKind.receipt,
+        description: describe('நிலையான வைப்பு மீளப்பெறல்', coding.certificateNo, coding.poojaName),
+        lines: [
+          {
+            accountId: depositAccountId,
+            amount: principal,
+            fundId: before.fundId,
+            fixedDepositId: id,
+          },
+          ...(interestAccountId === null
+            ? []
+            : [
+                {
+                  accountId: interestAccountId,
+                  amount: finalInterest,
+                  fundId: before.fundId,
+                  activityId: coding.activityId,
+                  fixedDepositId: id,
+                },
+              ]),
+        ],
+      },
+      context,
+    );
+
+    await this.prisma.fixedDeposit.update({
+      where: { id },
+      data: { status: DepositStatus.closed, closureVoucherId: BigInt(voucher.id) },
+    });
+
+    await this.audit.record(context, {
+      action: 'update',
+      entity: 'fixed_deposit',
+      entityRef: String(id),
+      summary: `Closed deposit ${before.certificateNo}; ${voucher.ref} receipts ${dto.amount}`,
+      diff: { status: { from: before.status, to: DepositStatus.closed } },
+    });
+
+    return this.findOneOrFail(id);
   }
 
   // Across the renewal chain: renewing issues a new certificate, but it is the same money earning.
@@ -465,6 +632,199 @@ export class FixedDepositsService {
     return chain.map((deposit) => ({ id: deposit.id, certificateNo: deposit.certificateNo }));
   }
 
+  private async raisePlacement(
+    depositId: number,
+    dto: CreateFixedDepositDto,
+    depositAccountId: number,
+    endowmentAccountId: number | null,
+    context: ActorContext,
+  ): Promise<VoucherRecordDto> {
+    const coding = await this.codingFor(depositId);
+    const header = {
+      date: dto.placedOn,
+      description: describe('நிலையான வைப்பு', coding.certificateNo, coding.poojaName),
+      party: coding.party ?? coding.bankName,
+      partyId: coding.partyId,
+      manualVoucherNo: dto.manualVoucherNo ?? '',
+      notes: dto.notes,
+    };
+
+    if (endowmentAccountId !== null) {
+      return this.vouchers.raiseForApproval(
+        {
+          ...header,
+          kind: VoucherKind.journal,
+          lines: [
+            {
+              accountId: depositAccountId,
+              amount: dto.principal,
+              fundId: dto.fundId,
+              fixedDepositId: depositId,
+              side: EntrySide.debit,
+            },
+            {
+              accountId: endowmentAccountId,
+              amount: dto.principal,
+              fundId: dto.fundId,
+              fixedDepositId: depositId,
+              side: EntrySide.credit,
+            },
+          ],
+        },
+        context,
+      );
+    }
+
+    return this.vouchers.raiseForApproval(
+      {
+        ...header,
+        kind: VoucherKind.payment,
+        mode: dto.mode,
+        bankAccountId: dto.mode === PaymentMode.cash ? undefined : dto.fromBankAccountId,
+        chequeNo: dto.chequeNo,
+        lines: [
+          {
+            accountId: depositAccountId,
+            amount: dto.principal,
+            fundId: dto.fundId,
+            fixedDepositId: depositId,
+          },
+        ],
+      },
+      context,
+    );
+  }
+
+  private assertPlacementFields(dto: CreateFixedDepositDto): void {
+    if (dto.source === DepositSource.opening) {
+      if (dto.mode || dto.fromBankAccountId || dto.chequeNo) {
+        throw new BadRequestException('A deposit held at opening moved no money, so takes no mode');
+      }
+
+      return;
+    }
+
+    if (!dto.manualVoucherNo?.trim()) {
+      throw new BadRequestException('The manual voucher number is required');
+    }
+
+    if (dto.source === DepositSource.bank && !dto.mode) {
+      throw new BadRequestException('Say how the principal was paid into the deposit');
+    }
+
+    if (dto.source === DepositSource.endowment && (dto.mode || dto.fromBankAccountId)) {
+      throw new BadRequestException(
+        'A sponsor-placed deposit moved none of the temple’s money, so takes no mode',
+      );
+    }
+  }
+
+  // Posted entries are corrected by further entries, never rewritten.
+  private async assertPrincipalIsEditable(placementVoucherId: bigint | null): Promise<void> {
+    if (placementVoucherId === null) return;
+
+    const voucher = await this.prisma.voucher.findUnique({
+      where: { id: placementVoucherId },
+      select: { ref: true, status: true },
+    });
+
+    if (voucher && voucher.status !== VoucherStatus.Cancelled) {
+      throw new ConflictException(
+        `${voucher.ref} put this principal on the books; cancel it, or correct it with a journal, before changing the amount or date`,
+      );
+    }
+  }
+
+  // Who and what a deposit's vouchers are coded to. Inactive sponsors and activities are left off
+  // rather than letting the voucher's coding checks refuse the entry.
+  private async codingFor(id: number) {
+    const deposit = await this.prisma.fixedDeposit.findUnique({
+      where: { id },
+      include: {
+        slot: {
+          include: {
+            eventType: { include: { activity: true } },
+            sponsors: { include: { party: true }, orderBy: { createdAt: 'asc' } },
+          },
+        },
+      },
+    });
+
+    if (!deposit) throw new NotFoundException(`Fixed deposit ${id} was not found`);
+
+    const activity = deposit.slot?.eventType.activity;
+    const sponsor = deposit.slot?.sponsors.find((entry) => entry.party.isActive)?.party;
+
+    return {
+      certificateNo: deposit.certificateNo,
+      bankName: deposit.bankName,
+      bankAccountId: deposit.bankAccountId,
+      fundId: deposit.fundId,
+      poojaName: deposit.slot ? poojaNameOf(deposit.slot) : null,
+      activityId: activity?.isActive ? activity.id : undefined,
+      party: sponsor?.nameTa ?? null,
+      partyId: sponsor?.id,
+    };
+  }
+
+  // Money arriving from the bank for a deposit; the bank account defaults to the deposit's own.
+  private moneyMovement(
+    coding: Awaited<ReturnType<FixedDepositsService['codingFor']>>,
+    dto: RecordInterestDto,
+  ) {
+    return {
+      date: dto.receivedOn,
+      mode: dto.mode,
+      bankAccountId:
+        dto.mode === PaymentMode.cash
+          ? undefined
+          : (dto.bankAccountId ?? coding.bankAccountId ?? undefined),
+      chequeNo: dto.chequeNo,
+      party: coding.party ?? coding.bankName,
+      partyId: coding.partyId,
+      manualVoucherNo: dto.manualVoucherNo,
+      notes: dto.notes,
+    };
+  }
+
+  // Interest is income on any head; the book balance is the principal side, on the deposit's own head.
+  private async records(deposits: DepositRow[]): Promise<DepositRecordDto[]> {
+    const [settings, interest, principal] = await Promise.all([
+      this.settings.accounting(),
+      this.ledger.byDimensionAndType('fixedDepositId'),
+      this.prisma.ledgerEntry.groupBy({
+        by: ['fixedDepositId', 'accountId'],
+        where: {
+          ...this.ledger.postedIn(),
+          fixedDepositId: { in: deposits.map((deposit) => deposit.id) },
+        },
+        _sum: { debit: true, credit: true },
+      }),
+    ]);
+
+    const onHead = new Map<string, number>(
+      principal.map((row) => [
+        `${row.fixedDepositId}:${row.accountId}`,
+        toRupees(row._sum.debit) - toRupees(row._sum.credit),
+      ]),
+    );
+
+    return deposits.map((deposit) => {
+      const head = deposit.ledgerAccountId ?? settings.depositAccountId;
+      const amount = toRupees(deposit.principal);
+      const posted = head === null ? 0 : (onHead.get(`${deposit.id}:${head}`) ?? 0);
+      // An opening deposit's principal is already in the head's opening balance.
+      const bookBalance = round(posted + (deposit.source === DepositSource.opening ? amount : 0));
+      const held = SETTLED.includes(deposit.status) ? 0 : amount;
+
+      return this.toRecord(deposit, settings.depositMaturityAlertDays, {
+        interestReceived: netIncome(interest.get(deposit.id)),
+        bookBalance,
+        bookDifference: round(bookBalance - held),
+      });
+    });
+  }
+
   private dataFrom(
     dto: CreateFixedDepositDto | RenewDepositDto,
     fundId: number,
@@ -510,8 +870,17 @@ export class FixedDepositsService {
   private toRecord(
     deposit: DepositRow,
     alertDays: number,
-    interestReceived: number,
+    books: Pick<DepositRecordDto, 'interestReceived' | 'bookBalance' | 'bookDifference'>,
   ): DepositRecordDto {
+    const voucherRef = (voucher: DepositRow['placementVoucher']) =>
+      voucher
+        ? {
+            id: Number(voucher.id),
+            ref: voucher.ref,
+            status: VoucherStatusWire.toWire(voucher.status),
+          }
+        : null;
+
     const principal = toRupees(deposit.principal);
     const rate = toRupees(deposit.interestRate);
     const maths = depositMaths(principal, rate, deposit.placedOn, deposit.maturesOn);
@@ -533,13 +902,16 @@ export class FixedDepositsService {
       slotId: deposit.slotId,
       poojaName: deposit.slot ? poojaNameOf(deposit.slot) : null,
       bankAccountId: deposit.bankAccountId,
+      source: deposit.source,
+      placementVoucher: voucherRef(deposit.placementVoucher),
+      closureVoucher: voucherRef(deposit.closureVoucher),
       status: deposit.status,
       renewedFromId: deposit.renewedFromId,
       notes: deposit.notes,
       ...maths,
       isMaturingSoon: isActive && maths.daysToMaturity >= 0 && maths.daysToMaturity <= alertDays,
       isOverdue: isActive && maths.daysToMaturity < 0,
-      interestReceived,
+      ...books,
     };
   }
 }

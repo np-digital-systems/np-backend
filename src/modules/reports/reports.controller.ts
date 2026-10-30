@@ -4,6 +4,7 @@ import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import {
   AccountingSummaryDto,
+  BalanceSheetDto,
   FinanceSummaryDto,
   IncomeStatementDto,
   QueryReportDto,
@@ -22,6 +23,13 @@ export class ReportsController {
   @ApiOperation({ summary: 'Every account’s net position; the two sides must agree' })
   trialBalance(@Query() query: QueryReportDto): Promise<TrialBalanceDto> {
     return this.reports.trialBalance(query.financialYearId);
+  }
+
+  @Get('balance-sheet')
+  @RequirePermissions('report:generate')
+  @ApiOperation({ summary: 'Assets against liabilities and equity at the end of the year' })
+  balanceSheet(@Query() query: QueryReportDto): Promise<BalanceSheetDto> {
+    return this.reports.balanceSheet(query.financialYearId);
   }
 
   @Get('income-statement')

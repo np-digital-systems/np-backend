@@ -7,6 +7,8 @@ const SEARCH_TYPES = [
   'Event',
   'Receipt',
   'Payment',
+  'Contra',
+  'Journal',
   'Fund',
   'Project',
   'Fixed Deposit',
