@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  ForbiddenException,
+  Get,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+  Query,
+} from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 
 import { Actor } from '../../common/decorators/actor.decorator';
@@ -6,6 +16,7 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { RequirePermissions } from '../../common/decorators/permissions.decorator';
 import { PageDto } from '../../common/dto/page.dto';
 import type { ActorContext, AuthenticatedUser } from '../../common/types/authenticated-user';
+import { VoucherKind } from '../../generated/prisma/enums';
 import { PermissionsService } from '../auth/permissions.service';
 import {
   CreateVoucherDto,
@@ -17,6 +28,8 @@ import {
 import { VouchersService } from './vouchers.service';
 
 const MANAGE_ALL = 'voucher:manage-all';
+// A journal can move any balance without money changing hands, so raising one is its own capability.
+const JOURNAL = 'voucher:journal';
 
 @ApiTags('vouchers')
 @ApiBearerAuth()
@@ -56,7 +69,13 @@ export class VouchersController {
   @ApiOperation({
     summary: 'Raise a voucher as a draft; the ledger is untouched until it is posted',
   })
-  create(@Body() dto: CreateVoucherDto, @Actor() context: ActorContext): Promise<VoucherRecordDto> {
+  async create(
+    @Body() dto: CreateVoucherDto,
+    @Actor() context: ActorContext,
+    @CurrentUser() user: AuthenticatedUser,
+  ): Promise<VoucherRecordDto> {
+    await this.assertMayJournal(dto, user);
+
     return this.vouchers.create(dto, context);
   }
 
@@ -69,6 +88,8 @@ export class VouchersController {
     @Actor() context: ActorContext,
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<VoucherRecordDto> {
+    await this.assertMayJournal(dto, user);
+
     return this.vouchers.update(id, dto, context, await this.canManageAll(user));
   }
 
@@ -121,6 +142,14 @@ export class VouchersController {
     @CurrentUser() user: AuthenticatedUser,
   ): Promise<VoucherRecordDto> {
     return this.vouchers.cancel(id, context, await this.canManageAll(user));
+  }
+
+  private async assertMayJournal(dto: CreateVoucherDto, user: AuthenticatedUser): Promise<void> {
+    if (dto.kind !== VoucherKind.journal) return;
+
+    if (!(await this.permissions.forRole(user.role)).has(JOURNAL)) {
+      throw new ForbiddenException('Raising a journal needs the voucher:journal permission');
+    }
   }
 
   private async canManageAll(user: AuthenticatedUser): Promise<boolean> {
