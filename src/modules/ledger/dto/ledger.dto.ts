@@ -21,7 +21,8 @@ export class LedgerRecordDto {
   @ApiProperty({ nullable: true }) projectId!: number | null;
   @ApiProperty({ nullable: true }) debit!: number | null;
   @ApiProperty({ nullable: true }) credit!: number | null;
-  @ApiProperty({ enum: PaymentMode }) mode!: PaymentMode;
+  @ApiProperty({ enum: PaymentMode, nullable: true, description: 'Null for a journal' })
+  mode!: PaymentMode | null;
   @ApiProperty({ nullable: true }) bankAccountId!: number | null;
   @ApiProperty({ enum: VoucherStatusWire.values }) status!: WireVoucherStatus;
   @ApiProperty({ type: AccountRefDto }) account!: AccountRefDto;
