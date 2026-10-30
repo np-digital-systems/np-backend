@@ -7,11 +7,18 @@ import { VoucherKind } from '../../generated/prisma/enums';
 import { PermissionsService } from '../auth/permissions.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { deriveEventStatus } from '../events/event-status';
-import { QuerySearchDto, SearchResultDto } from './dto/search.dto';
+import { QuerySearchDto, SearchResultDto, type SearchType } from './dto/search.dto';
 
 const contains = (search: string) => ({ contains: search, mode: 'insensitive' as const });
 
 // Each source is gated by its screen's permission, so search can't expose records the caller can't open.
+const VOUCHER_TYPE: Record<VoucherKind, SearchType> = {
+  receipt: 'Receipt',
+  payment: 'Payment',
+  contra: 'Contra',
+  journal: 'Journal',
+};
+
 @Injectable()
 export class SearchService {
   constructor(
@@ -110,13 +117,13 @@ export class SearchService {
 
     return rows.map((row) => ({
       id: String(row.id),
-      type: row.kind === VoucherKind.receipt ? ('Receipt' as const) : ('Payment' as const),
+      type: VOUCHER_TYPE[row.kind],
       title: row.description,
       subtitle: `${row.date.toISOString().slice(0, 10)} · ${row.party}`,
       meta: `Rs. ${toRupees(row.amount).toLocaleString('en-LK')}`,
       ref: row.ref,
       badge: VoucherStatusWire.toWire(row.status),
-      page: row.kind === VoucherKind.receipt ? 'Receipt Vouchers' : 'Payment Vouchers',
+      page: `${VOUCHER_TYPE[row.kind]} Vouchers`,
     }));
   }
 
