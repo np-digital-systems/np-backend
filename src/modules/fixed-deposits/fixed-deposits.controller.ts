@@ -7,6 +7,7 @@ import type { ActorContext } from '../../common/types/authenticated-user';
 import { DepositStatus } from '../../generated/prisma/enums';
 import { VoucherRecordDto } from '../vouchers/dto/voucher.dto';
 import {
+  CloseDepositDto,
   CreateFixedDepositDto,
   DepositInterestDto,
   DepositRecordDto,
@@ -103,11 +104,13 @@ export class FixedDepositsController {
 
   @Post(':id/close')
   @RequirePermissions('fixed-deposit:manage')
+  @ApiOperation({ summary: 'Close and raise the receipt that takes the principal off the books' })
   close(
     @Param('id', ParseIntPipe) id: number,
+    @Body() dto: CloseDepositDto,
     @Actor() context: ActorContext,
   ): Promise<DepositRecordDto> {
-    return this.deposits.changeStatus(id, DepositStatus.closed, context);
+    return this.deposits.close(id, dto, context);
   }
 
   @Post(':id/renew')

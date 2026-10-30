@@ -265,16 +265,7 @@ export class RecordInterestDto {
   notes?: string;
 }
 
-export class CloseDepositDto extends RecordInterestDto {
-  @ApiProperty({
-    minimum: 0.01,
-    description: 'Everything the bank paid out: the principal plus any final interest',
-  })
-  @Type(() => Number)
-  @IsNumber({ maxDecimalPlaces: 2 })
-  @IsPositive()
-  declare amount: number;
-}
+export class CloseDepositDto extends RecordInterestDto {}
 
 class DepositInterestYearDto {
   @ApiProperty() financialYearId!: number;
