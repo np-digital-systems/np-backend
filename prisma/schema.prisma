@@ -68,8 +68,26 @@ enum BankAccountType {
 enum VoucherKind {
   receipt
   payment
+  contra
+  journal
 
   @@map("voucher_kind")
+}
+
+enum EntrySide {
+  debit
+  credit
+
+  @@map("entry_side")
+}
+
+enum DepositSource {
+  bank
+  endowment
+  renewal
+  opening
+
+  @@map("deposit_source")
 }
 
 enum CostingStatus {
@@ -458,6 +476,7 @@ model Account {
   defaultForActivities Activity[]         @relation("ActivityDefaultAccount")
   costingLines         EventCostingLine[]
   eventBudgetLines     EventBudgetLine[]
+  deposits             FixedDeposit[]     @relation("DepositLedgerAccount")
 
   @@index([parentId], map: "accounts_parent")
   @@index([defaultPartyId], map: "accounts_default_party")
@@ -571,7 +590,7 @@ model Voucher {
   date            DateTime      @db.Date
   description     String
   amount          Decimal       @db.Decimal(14, 2)
-  mode            PaymentMode
+  mode            PaymentMode?
   bankAccountId   Int?          @map("bank_account_id")
   chequeNo        String?       @map("cheque_no")
   partyId         Int?          @map("party_id")
@@ -598,6 +617,8 @@ model Voucher {
   decidedByUser   UserAccount?     @relation("VoucherDecidedBy", fields: [decidedBy], references: [id])
   ledgerEntries   LedgerEntry[]
   sanththaPayment SanththaPayment?
+  placedDeposits  FixedDeposit[]   @relation("DepositPlacement")
+  closedDeposits  FixedDeposit[]   @relation("DepositClosure")
 
   @@index([financialYearId, date(sort: Desc)], map: "vouchers_year_date")
   @@index([kind, date(sort: Desc)], map: "vouchers_kind_date")
@@ -612,16 +633,17 @@ model Voucher {
 /// receipt credits income and every line of a payment debits expenditure, which
 /// follows from `voucher.kind`.
 model VoucherLine {
-  id             BigInt  @id @default(autoincrement())
-  voucherId      BigInt  @map("voucher_id")
-  lineNo         Int     @map("line_no") @db.SmallInt
-  accountId      Int     @map("account_id")
-  amount         Decimal @db.Decimal(14, 2)
-  fundId         Int     @map("fund_id")
-  projectId      Int?    @map("project_id")
-  activityId     Int?    @map("activity_id")
-  eventId        Int?    @map("event_id")
-  fixedDepositId Int?    @map("fixed_deposit_id")
+  id             BigInt     @id @default(autoincrement())
+  voucherId      BigInt     @map("voucher_id")
+  lineNo         Int        @map("line_no") @db.SmallInt
+  accountId      Int        @map("account_id")
+  amount         Decimal    @db.Decimal(14, 2)
+  fundId         Int        @map("fund_id")
+  projectId      Int?       @map("project_id")
+  activityId     Int?       @map("activity_id")
+  eventId        Int?       @map("event_id")
+  fixedDepositId Int?       @map("fixed_deposit_id")
+  side           EntrySide?
 
   voucher      Voucher       @relation(fields: [voucherId], references: [id], onDelete: Cascade)
   account      Account       @relation(fields: [accountId], references: [id])
@@ -695,33 +717,43 @@ model LedgerEntry {
 }
 
 model FixedDeposit {
-  id             Int            @id @default(autoincrement())
-  certificateNo  String         @unique(map: "fixed_deposits_certificate_no_key") @map("certificate_no")
-  bankName       String         @map("bank_name")
-  branch         String
-  principal      Decimal        @db.Decimal(14, 2)
-  interestRate   Decimal        @map("interest_rate") @db.Decimal(5, 2)
-  placedOn       DateTime       @map("placed_on") @db.Date
-  maturesOn      DateTime       @map("matures_on") @db.Date
-  tenureMonths   Int            @map("tenure_months") @db.SmallInt
-  interestPayout InterestPayout @map("interest_payout")
-  fundId         Int            @map("fund_id")
-  slotId         Int?           @map("slot_id")
-  status         DepositStatus  @default(active)
-  renewedFromId  Int?           @map("renewed_from_id")
-  bankAccountId  Int?           @map("bank_account_id")
-  notes          String?
+  id                 Int            @id @default(autoincrement())
+  certificateNo      String         @unique(map: "fixed_deposits_certificate_no_key") @map("certificate_no")
+  bankName           String         @map("bank_name")
+  branch             String
+  principal          Decimal        @db.Decimal(14, 2)
+  interestRate       Decimal        @map("interest_rate") @db.Decimal(5, 2)
+  placedOn           DateTime       @map("placed_on") @db.Date
+  maturesOn          DateTime       @map("matures_on") @db.Date
+  tenureMonths       Int            @map("tenure_months") @db.SmallInt
+  interestPayout     InterestPayout @map("interest_payout")
+  fundId             Int            @map("fund_id")
+  slotId             Int?           @map("slot_id")
+  ledgerAccountId    Int?           @map("ledger_account_id")
+  source             DepositSource  @default(opening)
+  placementVoucherId BigInt?        @map("placement_voucher_id")
+  closureVoucherId   BigInt?        @map("closure_voucher_id")
+  status             DepositStatus  @default(active)
+  renewedFromId      Int?           @map("renewed_from_id")
+  bankAccountId      Int?           @map("bank_account_id")
+  notes              String?
 
-  fund         Fund           @relation(fields: [fundId], references: [id])
-  slot         EventSlot?     @relation(fields: [slotId], references: [id])
-  bankAccount  BankAccount?   @relation(fields: [bankAccountId], references: [id])
-  renewedFrom  FixedDeposit?  @relation("DepositRenewal", fields: [renewedFromId], references: [id])
-  renewals     FixedDeposit[] @relation("DepositRenewal")
-  voucherLines VoucherLine[]
-  ledgerLines  LedgerEntry[]
+  fund             Fund           @relation(fields: [fundId], references: [id])
+  slot             EventSlot?     @relation(fields: [slotId], references: [id])
+  ledgerAccount    Account?       @relation("DepositLedgerAccount", fields: [ledgerAccountId], references: [id])
+  placementVoucher Voucher?       @relation("DepositPlacement", fields: [placementVoucherId], references: [id])
+  closureVoucher   Voucher?       @relation("DepositClosure", fields: [closureVoucherId], references: [id])
+  bankAccount      BankAccount?   @relation(fields: [bankAccountId], references: [id])
+  renewedFrom      FixedDeposit?  @relation("DepositRenewal", fields: [renewedFromId], references: [id])
+  renewals         FixedDeposit[] @relation("DepositRenewal")
+  voucherLines     VoucherLine[]
+  ledgerLines      LedgerEntry[]
 
   @@index([status, maturesOn], map: "deposits_maturing")
   @@index([slotId], map: "deposits_slot")
+  @@index([ledgerAccountId], map: "deposits_ledger_account")
+  @@index([placementVoucherId], map: "deposits_placement_voucher")
+  @@index([closureVoucherId], map: "deposits_closure_voucher")
   @@map("fixed_deposits")
 }
 
