@@ -153,7 +153,10 @@ export class CreateFixedDepositDto {
   @IsIn(PLACEMENT_SOURCES)
   source!: PlacementSource;
 
-  @ApiPropertyOptional({ enum: PaymentMode, description: 'How the principal was paid in; bank only' })
+  @ApiPropertyOptional({
+    enum: PaymentMode,
+    description: 'How the principal was paid in; bank only',
+  })
   @IsOptional()
   @IsEnum(PaymentMode)
   mode?: PaymentMode;
