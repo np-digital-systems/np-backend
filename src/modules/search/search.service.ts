@@ -192,14 +192,16 @@ export class SearchService {
 
   private async deposits(q: string, take: number): Promise<SearchResultDto[]> {
     const rows = await this.prisma.fixedDeposit.findMany({
-      where: { OR: [{ certificateNo: contains(q) }, { bankName: contains(q) }] },
+      where: {
+        OR: [{ certificateNo: contains(q) }, { name: contains(q) }, { bankName: contains(q) }],
+      },
       take,
     });
 
     return rows.map((row) => ({
       id: String(row.id),
       type: 'Fixed Deposit' as const,
-      title: `${row.bankName} · ${row.branch}`,
+      title: row.name ?? `${row.bankName} · ${row.branch}`,
       subtitle: `Matures ${row.maturesOn.toISOString().slice(0, 10)}`,
       meta: `Rs. ${toRupees(row.principal).toLocaleString('en-LK')}`,
       ref: row.certificateNo,
