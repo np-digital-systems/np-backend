@@ -11,6 +11,7 @@ import {
   CreateFixedDepositDto,
   DepositInterestDto,
   DepositRecordDto,
+  DepositVoucherDto,
   PoojaFundingDto,
   QueryDepositsDto,
   QueryPoojaFundingDto,
@@ -73,6 +74,13 @@ export class FixedDepositsController {
     @Actor() context: ActorContext,
   ): Promise<DepositRecordDto> {
     return this.deposits.update(id, dto, context);
+  }
+
+  @Get(':id/vouchers')
+  @RequirePermissions('fixed-deposit:view')
+  @ApiOperation({ summary: 'Every voucher raised for the deposit, across the renewal chain' })
+  voucherHistory(@Param('id', ParseIntPipe) id: number): Promise<DepositVoucherDto[]> {
+    return this.deposits.voucherHistory(id);
   }
 
   @Get(':id/interest')
