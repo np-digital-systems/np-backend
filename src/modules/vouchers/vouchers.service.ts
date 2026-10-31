@@ -755,6 +755,7 @@ export class VouchersService {
       bankAccountId: voucher.bankAccountId,
       chequeNo: voucher.chequeNo,
       party: voucher.party,
+      manualVoucherNo: voucher.manualVoucherNo,
       status: VoucherStatusWire.toWire(voucher.status),
       notes: voucher.notes,
       createdBy: actor(voucher.createdByUser)!,
