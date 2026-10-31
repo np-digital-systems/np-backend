@@ -32,6 +32,8 @@ import {
   CreateFixedDepositDto,
   DepositInterestDto,
   DepositRecordDto,
+  DepositVoucherDto,
+  type DepositVoucherRole,
   PoojaFundingDto,
   QueryDepositsDto,
   SlotOptionDto,
@@ -602,6 +604,74 @@ export class FixedDepositsService {
           : null,
       sponsorName: slot.sponsors.map((sponsor) => sponsor.party.nameTa).join(', ') || null,
     }));
+  }
+
+  // Pending and voided vouchers are listed too, each with its status, so nothing raised goes missing.
+  async voucherHistory(id: number): Promise<DepositVoucherDto[]> {
+    const chain = await this.renewalChain(id);
+    const ids = chain.map((deposit) => deposit.id);
+
+    const [deposits, vouchers] = await Promise.all([
+      this.prisma.fixedDeposit.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, source: true, placementVoucherId: true, closureVoucherId: true },
+      }),
+      this.prisma.voucher.findMany({
+        where: { lines: { some: { fixedDepositId: { in: ids } } } },
+        include: {
+          lines: {
+            where: { fixedDepositId: { in: ids } },
+            select: { fixedDepositId: true, account: { select: { type: true } } },
+          },
+        },
+        orderBy: [{ date: 'asc' }, { id: 'asc' }],
+      }),
+    ]);
+
+    const certificateOf = new Map(chain.map((deposit) => [deposit.id, deposit.certificateNo]));
+    const placedBy = new Map(
+      deposits.flatMap((deposit) =>
+        deposit.placementVoucherId === null
+          ? []
+          : [[deposit.placementVoucherId.toString(), deposit] as const],
+      ),
+    );
+    const closedBy = new Map(
+      deposits.flatMap((deposit) =>
+        deposit.closureVoucherId === null
+          ? []
+          : [[deposit.closureVoucherId.toString(), deposit] as const],
+      ),
+    );
+
+    return vouchers.map((voucher) => {
+      const key = voucher.id.toString();
+      const placed = placedBy.get(key);
+      const closed = closedBy.get(key);
+
+      let role: DepositVoucherRole = 'other';
+      if (closed) role = 'closure';
+      else if (placed) role = placed.source === DepositSource.renewal ? 'renewal' : 'placement';
+      else if (voucher.lines.some((line) => line.account.type === AccountType.income)) {
+        role = 'interest';
+      }
+
+      const depositId = closed?.id ?? placed?.id ?? voucher.lines[0]?.fixedDepositId ?? id;
+
+      return {
+        id: Number(voucher.id),
+        ref: voucher.ref,
+        kind: voucher.kind,
+        date: voucher.date.toISOString().slice(0, 10),
+        manualVoucherNo: voucher.manualVoucherNo,
+        description: voucher.description,
+        party: voucher.party,
+        amount: toRupees(voucher.amount),
+        status: VoucherStatusWire.toWire(voucher.status),
+        certificateNo: certificateOf.get(depositId) ?? '',
+        role,
+      };
+    });
   }
 
   private async renewalChain(id: number): Promise<{ id: number; certificateNo: string }[]> {
