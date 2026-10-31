@@ -281,6 +281,25 @@ export class DepositInterestDto {
   @ApiProperty() total!: number;
 }
 
+const VOUCHER_ROLES = ['placement', 'interest', 'renewal', 'closure', 'other'] as const;
+
+export type DepositVoucherRole = (typeof VOUCHER_ROLES)[number];
+
+export class DepositVoucherDto {
+  @ApiProperty() id!: number;
+  @ApiProperty() ref!: string;
+  @ApiProperty({ enum: ['receipt', 'payment', 'contra', 'journal'] }) kind!: string;
+  @ApiProperty() date!: string;
+  @ApiProperty({ nullable: true }) manualVoucherNo!: string | null;
+  @ApiProperty() description!: string;
+  @ApiProperty() party!: string;
+  @ApiProperty() amount!: number;
+  @ApiProperty() status!: string;
+  @ApiProperty({ description: 'The certificate in the renewal chain it belongs to' })
+  certificateNo!: string;
+  @ApiProperty({ enum: VOUCHER_ROLES }) role!: DepositVoucherRole;
+}
+
 export class SlotOptionDto {
   @ApiProperty() id!: number;
   @ApiProperty({ description: 'Pooja type and slot together' }) poojaName!: string;
