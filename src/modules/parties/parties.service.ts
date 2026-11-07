@@ -11,7 +11,6 @@ import { CreatePartyDto, PartyRecordDto, QueryPartiesDto, UpdatePartyDto } from 
 const PARTY_INCLUDE = {
   roles: true,
   member: { select: { partyId: true } },
-  account: { select: { id: true } },
 } satisfies Prisma.PartyInclude;
 
 type PartyRow = Prisma.PartyGetPayload<{ include: typeof PARTY_INCLUDE }>;
@@ -183,7 +182,6 @@ export class PartiesService {
       nameEn: party.nameEn ?? '',
       roles: kindsOf(party),
       isSponsor: party.member !== null,
-      accountId: party.account?.id ?? null,
       phone: party.phone,
       email: party.email,
       address: party.address,

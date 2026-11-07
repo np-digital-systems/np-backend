@@ -31,8 +31,6 @@ class PartyDto {
   roles!: PartyKind[];
   @ApiProperty({ description: 'Whether a sponsor profile exists for this party' })
   isSponsor!: boolean;
-  @ApiProperty({ nullable: true, description: 'Set when this party also signs in' })
-  accountId!: string | null;
   @ApiProperty({ nullable: true }) phone!: string | null;
   @ApiProperty({ nullable: true }) email!: string | null;
   @ApiProperty({ nullable: true }) address!: string | null;
