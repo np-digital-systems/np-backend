@@ -2,7 +2,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { hash } from '@node-rs/argon2';
 
 import { PrismaClient } from '../src/generated/prisma/client';
-import { AccountRole, PartyKind, PartyType } from '../src/generated/prisma/enums';
+import { AccountRole } from '../src/generated/prisma/enums';
 
 process.loadEnvFile('.env');
 
@@ -325,20 +325,10 @@ async function main(): Promise<void> {
   const staffed = await prisma.userAccount.count();
 
   if (staffed === 0) {
-    const party = await prisma.party.create({
-      data: {
-        type: PartyType.person,
-        nameTa: 'நிர்வாகி',
-        nameEn: 'Portal Administrator',
-        email,
-        roles: { create: [{ kind: PartyKind.staff }] },
-      },
-      select: { id: true },
-    });
-
     await prisma.userAccount.create({
       data: {
-        partyId: party.id,
+        nameTa: 'நிர்வாகி',
+        nameEn: 'Portal Administrator',
         email,
         passwordHash: await hash(password, { memoryCost: 19_456, timeCost: 2, parallelism: 1 }),
         role: AccountRole.admin,
