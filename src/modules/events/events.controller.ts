@@ -87,7 +87,7 @@ export class EventsController {
   @ApiOperation({
     summary: 'Who to offer on a collection sheet for this occurrence',
     description:
-      'Everyone who gave to an earlier year of the same slot, then sponsors, vendors and devotees. Contributor is computed, never stored.',
+      'Everyone who gave to an earlier year of the same slot, then members, vendors and staff. Contributor is computed, never stored.',
   })
   async contributors(
     @Param('id', ParseIntPipe) id: number,
