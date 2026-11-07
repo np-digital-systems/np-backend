@@ -15,6 +15,8 @@ export class LedgerRecordDto {
   @ApiProperty() voucherId!: number;
   @ApiProperty() date!: string;
   @ApiProperty() ref!: string;
+  @ApiProperty({ nullable: true, description: 'The number on the paper voucher' })
+  manualVoucherNo!: string | null;
   @ApiProperty() description!: string;
   @ApiProperty() accountId!: number;
   @ApiProperty() fundId!: number;

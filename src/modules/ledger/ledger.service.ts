@@ -24,7 +24,15 @@ const ENTRY_INCLUDE = {
   fund: true,
   project: true,
   voucher: {
-    select: { id: true, ref: true, description: true, mode: true, status: true, chequeNo: true },
+    select: {
+      id: true,
+      ref: true,
+      manualVoucherNo: true,
+      description: true,
+      mode: true,
+      status: true,
+      chequeNo: true,
+    },
   },
 } satisfies Prisma.LedgerEntryInclude;
 
@@ -188,6 +196,7 @@ export class LedgerService {
       voucherId: Number(row.voucherId),
       date: row.date.toISOString().slice(0, 10),
       ref: row.voucher.ref,
+      manualVoucherNo: row.voucher.manualVoucherNo,
       description: row.voucher.description,
       accountId: row.accountId,
       fundId: row.fundId,
