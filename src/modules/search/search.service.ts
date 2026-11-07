@@ -86,15 +86,8 @@ export class SearchService {
       select: {
         partyId: true,
         memberNo: true,
-        subscribes: true,
-        party: {
-          select: {
-            nameTa: true,
-            nameEn: true,
-            address: true,
-            _count: { select: { sponsorships: true } },
-          },
-        },
+        isActive: true,
+        party: { select: { nameTa: true, nameEn: true, address: true } },
       },
       take,
       orderBy: { memberNo: 'asc' },
@@ -105,8 +98,7 @@ export class SearchService {
       type: 'Sanththa' as const,
       title: row.party.nameEn ?? row.party.nameTa,
       subtitle: row.party.address || 'Member',
-      meta:
-        row.subscribes || row.party._count.sponsorships > 0 ? 'Owes sanththa' : 'Sanththa optional',
+      meta: row.isActive ? 'Member' : 'Retired',
       ref: row.memberNo,
       badge: null,
       page: 'Sanththa Register',
