@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseIntPipe,
@@ -18,6 +19,7 @@ import { PageDto } from '../../common/dto/page.dto';
 import type { ActorContext, AuthenticatedUser } from '../../common/types/authenticated-user';
 import { PermissionsService } from '../auth/permissions.service';
 import {
+  EnrolForYearDto,
   QueryPaymentsDto,
   QueryRegisterDto,
   RecordPaymentDto,
@@ -113,6 +115,24 @@ export class SanththaController {
     @Actor() context: ActorContext,
   ): Promise<SanththaPaymentDto> {
     return this.sanththa.record(dto, context);
+  }
+
+  @Post('enrolments')
+  @RequirePermissions('contribution:record')
+  @ApiOperation({ summary: 'Add a member to one year’s sanththa list' })
+  enrol(@Body() dto: EnrolForYearDto, @Actor() context: ActorContext): Promise<void> {
+    return this.sanththa.enrol(dto.memberId, dto.year, context);
+  }
+
+  @Delete('enrolments/:memberId/:year')
+  @RequirePermissions('contribution:record')
+  @ApiOperation({ summary: 'Take a member off one year’s sanththa list, before they pay' })
+  unenrol(
+    @Param('memberId', ParseIntPipe) memberId: number,
+    @Param('year', ParseIntPipe) year: number,
+    @Actor() context: ActorContext,
+  ): Promise<void> {
+    return this.sanththa.unenrol(memberId, year, context);
   }
 
   private async canSeeContact(user: AuthenticatedUser): Promise<boolean> {
