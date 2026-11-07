@@ -15,7 +15,7 @@ import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { VouchersService } from '../vouchers/vouchers.service';
 import { SettingsService } from '../settings/settings.service';
-import { OWES_SANTHTHA } from '../sponsors/sponsors.service';
+import { owesSanththaIn, sponsoredOccurrencesIn } from './sanththa-year';
 import {
   QueryPaymentsDto,
   QueryRegisterDto,
@@ -38,7 +38,6 @@ const SPONSOR_INCLUDE = {
       nameEn: true,
       phone: true,
       address: true,
-      _count: { select: { sponsorships: true } },
     },
   },
 } satisfies Prisma.MemberInclude;
@@ -82,16 +81,29 @@ export class SanththaService {
     canSeeContact: boolean,
   ): Promise<PageDto<SanththaRegisterRowDto>> {
     const year = query.year ?? new Date().getFullYear();
+    const owes = owesSanththaIn(year);
 
+    // The year's list: those who owe it, plus anyone who paid that year regardless.
     const where: Prisma.MemberWhereInput = {
       isActive: true,
-      ...(query.outstandingOnly ? { AND: [OWES_SANTHTHA, { payments: { none: { year } } }] } : {}),
+      ...(query.outstandingOnly
+        ? { AND: [owes, { payments: { none: { year } } }] }
+        : { OR: [owes, { payments: { some: { year } } }] }),
     };
 
     const [sponsors, total] = await this.prisma.$transaction([
       this.prisma.member.findMany({
         where,
-        include: { ...SPONSOR_INCLUDE, payments: { select: { year: true, amount: true } } },
+        include: {
+          party: {
+            select: {
+              ...SPONSOR_INCLUDE.party.select,
+              eventsSponsored: sponsoredOccurrencesIn(year),
+            },
+          },
+          payments: { select: { year: true, amount: true } },
+          enrolments: { where: { year }, select: { year: true } },
+        },
         orderBy: { memberNo: 'asc' },
         skip: query.skip,
         take: query.limit,
@@ -101,6 +113,8 @@ export class SanththaService {
 
     const rows = sponsors.map((sponsor) => ({
       ...this.toSponsor(sponsor, canSeeContact),
+      isPoojaSponsor: sponsor.party.eventsSponsored.length > 0,
+      isEnrolled: sponsor.enrolments.length > 0,
       paidYears: sponsor.payments.map((payment) => payment.year).sort((a, b) => b - a),
       totalPaid: round(
         sponsor.payments.reduce((sum, payment) => sum + toRupees(payment.amount), 0),
@@ -114,9 +128,9 @@ export class SanththaService {
   async summary(year = new Date().getFullYear()): Promise<SanththaSummaryDto> {
     const [sponsors, subscribing, outstanding, payments, rate] = await Promise.all([
       this.prisma.member.count({ where: { isActive: true } }),
-      this.prisma.member.count({ where: { isActive: true, ...OWES_SANTHTHA } }),
+      this.prisma.member.count({ where: { isActive: true, ...owesSanththaIn(year) } }),
       this.prisma.member.count({
-        where: { isActive: true, AND: [OWES_SANTHTHA, { payments: { none: { year } } }] },
+        where: { isActive: true, AND: [owesSanththaIn(year), { payments: { none: { year } } }] },
       }),
       this.prisma.sanththaPayment.aggregate({
         where: { year },
@@ -485,6 +499,66 @@ export class SanththaService {
     }
   }
 
+  // A member who chooses to pay this year; next year's list starts without them.
+  async enrol(memberId: number, year: number, context: ActorContext): Promise<void> {
+    const member = await this.prisma.member.findUnique({
+      where: { partyId: memberId },
+      select: { memberNo: true, isActive: true },
+    });
+
+    if (!member) throw new NotFoundException(`Party ${memberId} is not a member`);
+    if (!member.isActive) throw new BadRequestException(`${member.memberNo} is retired`);
+
+    const existing = await this.prisma.sanththaEnrolment.findUnique({
+      where: { memberId_year: { memberId, year } },
+    });
+
+    if (existing) {
+      throw new ConflictException(`${member.memberNo} is already on the ${year} sanththa list`);
+    }
+
+    await this.prisma.sanththaEnrolment.create({ data: { memberId, year } });
+
+    await this.audit.record(context, {
+      action: 'create',
+      entity: 'sanththa_enrolment',
+      entityRef: `${memberId}:${year}`,
+      summary: `Added ${member.memberNo} to the ${year} sanththa list`,
+    });
+  }
+
+  // Pooja sponsors stay on the list whatever this does; they owe it by sponsoring.
+  async unenrol(memberId: number, year: number, context: ActorContext): Promise<void> {
+    const enrolment = await this.prisma.sanththaEnrolment.findUnique({
+      where: { memberId_year: { memberId, year } },
+      include: { member: { select: { memberNo: true } } },
+    });
+
+    if (!enrolment) {
+      throw new NotFoundException(`That member is not on the ${year} sanththa list`);
+    }
+
+    const paid = await this.prisma.sanththaPayment.findUnique({
+      where: { memberId_year: { memberId, year } },
+      select: { id: true },
+    });
+
+    if (paid) {
+      throw new ConflictException(
+        `${enrolment.member.memberNo} has already paid for ${year}; correct the payment first`,
+      );
+    }
+
+    await this.prisma.sanththaEnrolment.delete({ where: { memberId_year: { memberId, year } } });
+
+    await this.audit.record(context, {
+      action: 'delete',
+      entity: 'sanththa_enrolment',
+      entityRef: `${memberId}:${year}`,
+      summary: `Removed ${enrolment.member.memberNo} from the ${year} sanththa list`,
+    });
+  }
+
   private toSponsor(sponsor: SponsorRow, canSeeContact: boolean): SanththaSponsorDto {
     return {
       partyId: sponsor.partyId,
@@ -494,8 +568,6 @@ export class SanththaService {
       phone: canSeeContact ? sponsor.party.phone : null,
       address: canSeeContact ? sponsor.party.address : null,
       sponsorSince: sponsor.memberSince.toISOString().slice(0, 10),
-      subscribes: sponsor.subscribes,
-      owesSanththa: sponsor.subscribes || sponsor.party._count.sponsorships > 0,
     };
   }
 
