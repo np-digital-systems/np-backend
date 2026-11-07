@@ -28,7 +28,6 @@ const SPONSOR_SELECT = {
   phone: true,
   email: true,
   address: true,
-  account: { select: { id: true } },
   member: { select: { memberNo: true } },
 } satisfies Prisma.PartySelect;
 
@@ -335,7 +334,6 @@ export class EventSponsorsService {
       phone: canSeeContact ? row.phone : null,
       address: row.address ?? '',
       sponsorNo: row.member?.memberNo ?? null,
-      accountId: row.account?.id ?? null,
     };
   }
 
