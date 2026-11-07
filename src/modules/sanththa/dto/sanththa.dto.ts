@@ -29,6 +29,8 @@ export class SanththaSponsorDto {
   @ApiProperty({ nullable: true }) sponsorSince!: string | null;
   @ApiProperty({ description: 'Whether the yearly subscription is due from them' })
   subscribes!: boolean;
+  @ApiProperty({ description: 'Pooja sponsors always owe it; other members only if they opted in' })
+  owesSanththa!: boolean;
 }
 
 export class SanththaPaymentDto {
