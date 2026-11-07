@@ -10,7 +10,7 @@ import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
-import { EventFunding, PartyType } from '../../generated/prisma/enums';
+import { EventFunding } from '../../generated/prisma/enums';
 import {
   CreateSponsorDto,
   QueryDirectoryDto,
@@ -29,7 +29,7 @@ const SPONSOR_SELECT = {
   email: true,
   address: true,
   account: { select: { id: true } },
-  sponsor: { select: { sponsorNo: true } },
+  member: { select: { memberNo: true } },
 } satisfies Prisma.PartySelect;
 
 type SponsorRow = Prisma.PartyGetPayload<{ select: typeof SPONSOR_SELECT }>;
@@ -52,13 +52,14 @@ export class EventSponsorsService {
     private readonly audit: AuditService,
   ) {}
 
-  // Not filtered by role: any party can become a sponsor without being registered twice.
+  // Only members can sponsor a pooja, so only active members are offered.
   async directory(
     query: QueryDirectoryDto,
     canSeeContact: boolean,
   ): Promise<PageDto<SponsorPartyDto>> {
     const where: Prisma.PartyWhereInput = {
       isActive: true,
+      member: { isActive: true },
       roles: query.kind ? { some: { kind: query.kind } } : undefined,
       OR: query.search
         ? [
@@ -125,14 +126,9 @@ export class EventSponsorsService {
     await this.assertPartyIsUsable(dto.partyId);
     await this.assertNotDuplicate(slotId, dto.partyId);
 
-    const created = await this.prisma.$transaction(async (tx) => {
-      // Sponsoring creates the sponsor profile if needed.
-      await this.ensureSponsorProfile(tx, dto.partyId);
-
-      return tx.eventTypeSponsor.create({
-        data: { slotId, partyId: dto.partyId },
-        include: ASSIGNMENT_INCLUDE,
-      });
+    const created = await this.prisma.eventTypeSponsor.create({
+      data: { slotId, partyId: dto.partyId },
+      include: ASSIGNMENT_INCLUDE,
     });
 
     await this.audit.record(context, {
@@ -167,14 +163,10 @@ export class EventSponsorsService {
 
     await this.assertNotDuplicate(slotId, partyId, id);
 
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await this.ensureSponsorProfile(tx, partyId);
-
-      return tx.eventTypeSponsor.update({
-        where: { id },
-        data: { slotId, partyId },
-        include: ASSIGNMENT_INCLUDE,
-      });
+    const updated = await this.prisma.eventTypeSponsor.update({
+      where: { id },
+      data: { slotId, partyId },
+      include: ASSIGNMENT_INCLUDE,
     });
 
     await this.audit.record(context, {
@@ -259,26 +251,18 @@ export class EventSponsorsService {
     }
   }
 
-  // Idempotent.
-  private async ensureSponsorProfile(tx: Prisma.TransactionClient, partyId: number): Promise<void> {
-    await tx.sponsor.upsert({
-      where: { partyId },
-      create: { partyId, sponsorNo: '', sponsorSince: new Date() },
-      update: {},
-      select: { partyId: true },
-    });
-  }
-
   private async assertPartyIsUsable(partyId: number): Promise<void> {
     const party = await this.prisma.party.findUnique({
       where: { id: partyId },
-      select: { isActive: true, nameTa: true, type: true },
+      select: { isActive: true, nameTa: true, member: { select: { isActive: true } } },
     });
 
     if (!party) throw new NotFoundException(`Party ${partyId} was not found`);
     if (!party.isActive) throw new BadRequestException(`${party.nameTa} is retired`);
-    if (party.type !== PartyType.person) {
-      throw new BadRequestException(`${party.nameTa} is an organisation and cannot sponsor`);
+    if (!party.member?.isActive) {
+      throw new BadRequestException(
+        `${party.nameTa} is not a member; enrol them in Members before they can sponsor a pooja`,
+      );
     }
   }
 
@@ -350,7 +334,7 @@ export class EventSponsorsService {
       email: canSeeContact ? row.email : null,
       phone: canSeeContact ? row.phone : null,
       address: row.address ?? '',
-      sponsorNo: row.sponsor?.sponsorNo ?? null,
+      sponsorNo: row.member?.memberNo ?? null,
       accountId: row.account?.id ?? null,
     };
   }
