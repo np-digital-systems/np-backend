@@ -81,6 +81,13 @@ enum EntrySide {
   @@map("entry_side")
 }
 
+enum DepositPurpose {
+  general
+  pooja
+
+  @@map("deposit_purpose")
+}
+
 enum DepositSource {
   bank
   endowment
@@ -719,6 +726,7 @@ model LedgerEntry {
 model FixedDeposit {
   id                 Int            @id @default(autoincrement())
   certificateNo      String         @unique(map: "fixed_deposits_certificate_no_key") @map("certificate_no")
+  name               String?
   bankName           String         @map("bank_name")
   branch             String
   principal          Decimal        @db.Decimal(14, 2)
@@ -728,6 +736,7 @@ model FixedDeposit {
   tenureMonths       Int            @map("tenure_months") @db.SmallInt
   interestPayout     InterestPayout @map("interest_payout")
   fundId             Int            @map("fund_id")
+  purpose            DepositPurpose @default(general)
   slotId             Int?           @map("slot_id")
   ledgerAccountId    Int?           @map("ledger_account_id")
   source             DepositSource  @default(opening)

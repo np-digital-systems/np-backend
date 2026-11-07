@@ -17,7 +17,12 @@ import {
 
 import { InterestPayoutWire } from '../../../common/enums/wire';
 import type { WireInterestPayout } from '../../../common/enums/wire';
-import { DepositSource, DepositStatus, PaymentMode } from '../../../generated/prisma/enums';
+import {
+  DepositPurpose,
+  DepositSource,
+  DepositStatus,
+  PaymentMode,
+} from '../../../generated/prisma/enums';
 
 // `renewal` is only ever set by renewing.
 const PLACEMENT_SOURCES = [
@@ -37,6 +42,7 @@ class VoucherRefDto {
 export class DepositRecordDto {
   @ApiProperty() id!: number;
   @ApiProperty() certificateNo!: string;
+  @ApiProperty({ nullable: true }) name!: string | null;
   @ApiProperty() bankName!: string;
   @ApiProperty() branch!: string;
   @ApiProperty() principal!: number;
@@ -47,7 +53,9 @@ export class DepositRecordDto {
   @ApiProperty({ enum: InterestPayoutWire.values }) interestPayout!: WireInterestPayout;
   @ApiProperty() fundId!: number;
   @ApiProperty() fundName!: string;
-  @ApiProperty({ nullable: true, description: 'Null for a kovil deposit' }) slotId!: number | null;
+  @ApiProperty({ enum: DepositPurpose }) purpose!: DepositPurpose;
+  @ApiProperty({ nullable: true, description: 'Set only for a pooja deposit' })
+  slotId!: number | null;
   @ApiProperty({ nullable: true }) poojaName!: string | null;
   @ApiProperty({ nullable: true }) bankAccountId!: number | null;
   @ApiProperty({ enum: DepositSource }) source!: DepositSource;
@@ -72,6 +80,12 @@ export class DepositRecordDto {
 }
 
 export class CreateFixedDepositDto {
+  @ApiProperty({ description: 'What the committee calls the deposit' })
+  @IsString()
+  @IsNotEmpty({ message: 'Give the deposit a name' })
+  @MaxLength(120)
+  name!: string;
+
   @ApiProperty()
   @IsString()
   @MaxLength(60)
@@ -125,7 +139,13 @@ export class CreateFixedDepositDto {
   @Min(1)
   fundId!: number;
 
-  @ApiPropertyOptional({ description: 'The pooja slot the interest pays for; omit for the kovil' })
+  @ApiProperty({ enum: DepositPurpose })
+  @IsEnum(DepositPurpose)
+  purpose!: DepositPurpose;
+
+  @ApiPropertyOptional({
+    description: 'The pooja slot the interest pays for; required for a pooja',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -190,12 +210,14 @@ const PLACEMENT_FIELDS = [
 ] as const;
 
 export class UpdateFixedDepositDto extends PartialType(
-  OmitType(CreateFixedDepositDto, ['certificateNo', ...PLACEMENT_FIELDS] as const),
+  OmitType(CreateFixedDepositDto, PLACEMENT_FIELDS),
 ) {}
 
-// Fund and pooja carry over from the certificate being renewed.
+// Name, fund and purpose carry over from the certificate being renewed.
 export class RenewDepositDto extends OmitType(CreateFixedDepositDto, [
+  'name',
   'fundId',
+  'purpose',
   'slotId',
   ...PLACEMENT_FIELDS,
 ] as const) {
@@ -279,6 +301,25 @@ export class DepositInterestDto {
   certificates!: string[];
   @ApiProperty({ type: [DepositInterestYearDto] }) years!: DepositInterestYearDto[];
   @ApiProperty() total!: number;
+}
+
+const VOUCHER_ROLES = ['placement', 'interest', 'renewal', 'closure', 'other'] as const;
+
+export type DepositVoucherRole = (typeof VOUCHER_ROLES)[number];
+
+export class DepositVoucherDto {
+  @ApiProperty() id!: number;
+  @ApiProperty() ref!: string;
+  @ApiProperty({ enum: ['receipt', 'payment', 'contra', 'journal'] }) kind!: string;
+  @ApiProperty() date!: string;
+  @ApiProperty({ nullable: true }) manualVoucherNo!: string | null;
+  @ApiProperty() description!: string;
+  @ApiProperty() party!: string;
+  @ApiProperty() amount!: number;
+  @ApiProperty() status!: string;
+  @ApiProperty({ description: 'The certificate in the renewal chain it belongs to' })
+  certificateNo!: string;
+  @ApiProperty({ enum: VOUCHER_ROLES }) role!: DepositVoucherRole;
 }
 
 export class SlotOptionDto {

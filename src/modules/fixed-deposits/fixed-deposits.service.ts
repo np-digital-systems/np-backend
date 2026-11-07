@@ -12,6 +12,7 @@ import { Prisma } from '../../generated/prisma/client';
 import { InterestPayoutWire } from '../../common/enums/wire';
 import {
   AccountType,
+  DepositPurpose,
   DepositSource,
   DepositStatus,
   EntrySide,
@@ -32,6 +33,8 @@ import {
   CreateFixedDepositDto,
   DepositInterestDto,
   DepositRecordDto,
+  DepositVoucherDto,
+  type DepositVoucherRole,
   PoojaFundingDto,
   QueryDepositsDto,
   SlotOptionDto,
@@ -106,6 +109,7 @@ export class FixedDepositsService {
   async create(dto: CreateFixedDepositDto, context: ActorContext): Promise<DepositRecordDto> {
     this.assertDates(dto.placedOn, dto.maturesOn);
     this.assertPlacementFields(dto);
+    this.assertPurpose(dto.purpose, dto.slotId ?? null);
     await this.assertFundIsActive(dto.fundId);
     if (dto.slotId) await this.assertSlotIsActive(dto.slotId);
 
@@ -119,7 +123,12 @@ export class FixedDepositsService {
 
     const deposit = await this.prisma.fixedDeposit.create({
       data: {
-        ...this.dataFrom(dto, dto.fundId, dto.slotId ?? null),
+        ...this.dataFrom(dto, {
+          name: dto.name.trim(),
+          fundId: dto.fundId,
+          purpose: dto.purpose,
+          slotId: dto.slotId ?? null,
+        }),
         source: dto.source,
         ledgerAccountId: depositAccountId,
       },
@@ -176,11 +185,32 @@ export class FixedDepositsService {
       placedOn !== before.placedOn.toISOString().slice(0, 10);
 
     if (movesBooks) await this.assertPrincipalIsEditable(before.placementVoucherId);
-    if (dto.slotId) await this.assertSlotIsActive(dto.slotId);
+
+    // A general deposit names no slot, so switching to general clears it.
+    const purpose = dto.purpose ?? before.purpose;
+    const slotId =
+      purpose === DepositPurpose.general
+        ? null
+        : dto.slotId !== undefined
+          ? dto.slotId
+          : before.slotId;
+
+    this.assertPurpose(purpose, slotId);
+    if (slotId !== null && slotId !== before.slotId) await this.assertSlotIsActive(slotId);
+
+    const certificateNo = dto.certificateNo?.trim();
+
+    if (certificateNo && certificateNo !== before.certificateNo) {
+      const clash = await this.prisma.fixedDeposit.findUnique({ where: { certificateNo } });
+
+      if (clash) throw new ConflictException(`Certificate ${certificateNo} is already recorded`);
+    }
 
     const deposit = await this.prisma.fixedDeposit.update({
       where: { id },
       data: {
+        certificateNo,
+        name: dto.name?.trim(),
         bankName: dto.bankName,
         branch: dto.branch,
         principal: dto.principal,
@@ -189,7 +219,8 @@ export class FixedDepositsService {
         maturesOn: dto.maturesOn ? new Date(dto.maturesOn) : undefined,
         tenureMonths: dto.tenureMonths,
         interestPayout: InterestPayoutWire.toPrismaOptional(dto.interestPayout),
-        slotId: dto.slotId,
+        purpose,
+        slotId,
         bankAccountId: dto.bankAccountId,
         notes: dto.notes,
       },
@@ -266,7 +297,12 @@ export class FixedDepositsService {
 
       return tx.fixedDeposit.create({
         data: {
-          ...this.dataFrom(dto, previous.fundId, previous.slotId),
+          ...this.dataFrom(dto, {
+            name: previous.name,
+            fundId: previous.fundId,
+            purpose: previous.purpose,
+            slotId: previous.slotId,
+          }),
           renewedFromId: id,
           source: DepositSource.renewal,
           ledgerAccountId: depositAccountId,
@@ -604,6 +640,74 @@ export class FixedDepositsService {
     }));
   }
 
+  // Pending and voided vouchers are listed too, each with its status, so nothing raised goes missing.
+  async voucherHistory(id: number): Promise<DepositVoucherDto[]> {
+    const chain = await this.renewalChain(id);
+    const ids = chain.map((deposit) => deposit.id);
+
+    const [deposits, vouchers] = await Promise.all([
+      this.prisma.fixedDeposit.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, source: true, placementVoucherId: true, closureVoucherId: true },
+      }),
+      this.prisma.voucher.findMany({
+        where: { lines: { some: { fixedDepositId: { in: ids } } } },
+        include: {
+          lines: {
+            where: { fixedDepositId: { in: ids } },
+            select: { fixedDepositId: true, account: { select: { type: true } } },
+          },
+        },
+        orderBy: [{ date: 'asc' }, { id: 'asc' }],
+      }),
+    ]);
+
+    const certificateOf = new Map(chain.map((deposit) => [deposit.id, deposit.certificateNo]));
+    const placedBy = new Map(
+      deposits.flatMap((deposit) =>
+        deposit.placementVoucherId === null
+          ? []
+          : [[deposit.placementVoucherId.toString(), deposit] as const],
+      ),
+    );
+    const closedBy = new Map(
+      deposits.flatMap((deposit) =>
+        deposit.closureVoucherId === null
+          ? []
+          : [[deposit.closureVoucherId.toString(), deposit] as const],
+      ),
+    );
+
+    return vouchers.map((voucher) => {
+      const key = voucher.id.toString();
+      const placed = placedBy.get(key);
+      const closed = closedBy.get(key);
+
+      let role: DepositVoucherRole = 'other';
+      if (closed) role = 'closure';
+      else if (placed) role = placed.source === DepositSource.renewal ? 'renewal' : 'placement';
+      else if (voucher.lines.some((line) => line.account.type === AccountType.income)) {
+        role = 'interest';
+      }
+
+      const depositId = closed?.id ?? placed?.id ?? voucher.lines[0]?.fixedDepositId ?? id;
+
+      return {
+        id: Number(voucher.id),
+        ref: voucher.ref,
+        kind: voucher.kind,
+        date: voucher.date.toISOString().slice(0, 10),
+        manualVoucherNo: voucher.manualVoucherNo,
+        description: voucher.description,
+        party: voucher.party,
+        amount: toRupees(voucher.amount),
+        status: VoucherStatusWire.toWire(voucher.status),
+        certificateNo: certificateOf.get(depositId) ?? '',
+        role,
+      };
+    });
+  }
+
   private async renewalChain(id: number): Promise<{ id: number; certificateNo: string }[]> {
     const all = await this.prisma.fixedDeposit.findMany({
       select: { id: true, certificateNo: true, renewedFromId: true },
@@ -827,11 +931,14 @@ export class FixedDepositsService {
 
   private dataFrom(
     dto: CreateFixedDepositDto | RenewDepositDto,
-    fundId: number,
-    slotId: number | null,
+    carried: Pick<
+      Prisma.FixedDepositUncheckedCreateInput,
+      'name' | 'fundId' | 'purpose' | 'slotId'
+    >,
   ): Prisma.FixedDepositUncheckedCreateInput {
     return {
-      certificateNo: dto.certificateNo,
+      ...carried,
+      certificateNo: dto.certificateNo.trim(),
       bankName: dto.bankName,
       branch: dto.branch,
       principal: dto.principal,
@@ -840,11 +947,19 @@ export class FixedDepositsService {
       maturesOn: new Date(dto.maturesOn),
       tenureMonths: dto.tenureMonths,
       interestPayout: InterestPayoutWire.toPrisma(dto.interestPayout),
-      fundId,
-      slotId,
       bankAccountId: dto.bankAccountId,
       notes: dto.notes,
     };
+  }
+
+  private assertPurpose(purpose: DepositPurpose, slotId: number | null): void {
+    if (purpose === DepositPurpose.pooja && slotId === null) {
+      throw new BadRequestException('A pooja deposit must name the pooja it pays for');
+    }
+
+    if (purpose === DepositPurpose.general && slotId !== null) {
+      throw new BadRequestException('A general deposit cannot name a pooja');
+    }
   }
 
   private assertDates(placedOn: string, maturesOn: string): void {
@@ -889,6 +1004,7 @@ export class FixedDepositsService {
     return {
       id: deposit.id,
       certificateNo: deposit.certificateNo,
+      name: deposit.name,
       bankName: deposit.bankName,
       branch: deposit.branch,
       principal,
@@ -899,6 +1015,7 @@ export class FixedDepositsService {
       interestPayout: InterestPayoutWire.toWire(deposit.interestPayout),
       fundId: deposit.fundId,
       fundName: deposit.fund.nameEn ?? deposit.fund.nameTa,
+      purpose: deposit.purpose,
       slotId: deposit.slotId,
       poojaName: deposit.slot ? poojaNameOf(deposit.slot) : null,
       bankAccountId: deposit.bankAccountId,

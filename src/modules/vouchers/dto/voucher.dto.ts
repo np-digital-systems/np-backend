@@ -128,6 +128,8 @@ class VoucherDto {
   @ApiProperty({ nullable: true }) bankAccountId!: number | null;
   @ApiProperty({ nullable: true }) chequeNo!: string | null;
   @ApiProperty({ description: 'Payer for a receipt, payee for a payment' }) party!: string;
+  @ApiProperty({ nullable: true, description: 'The number on the temple’s physical voucher book' })
+  manualVoucherNo!: string | null;
   @ApiProperty({ enum: VoucherStatusWire.values }) status!: WireVoucherStatus;
   @ApiProperty({ nullable: true }) notes!: string | null;
   @ApiProperty({ type: VoucherActorDto }) createdBy!: VoucherActorDto;
