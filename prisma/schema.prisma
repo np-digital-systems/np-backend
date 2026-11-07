@@ -295,20 +295,19 @@ model PartyRole {
 
 /// A sponsor profile. The primary key is the foreign key, so the 1:1 with a
 /// party cannot be broken and no name is stored twice.
-/// The temple's member register. Pooja sponsors are members who always owe the
-/// yearly sanththa; for anyone else it is optional, which `subscribes` records.
+/// The temple's member register. Sanththa is not decided here: see SanththaEnrolment.
 model Member {
   partyId     Int      @id @map("party_id")
   memberNo    String   @unique(map: "members_member_no_key") @map("member_no")
   memberSince DateTime @map("member_since") @db.Date
-  subscribes  Boolean  @default(false)
   isActive    Boolean  @default(true) @map("is_active")
   notes       String?
   createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  party    Party             @relation(fields: [partyId], references: [id], onDelete: Cascade)
-  payments SanththaPayment[]
+  party      Party               @relation(fields: [partyId], references: [id], onDelete: Cascade)
+  payments   SanththaPayment[]
+  enrolments SanththaEnrolment[]
 
   @@index([isActive], map: "members_active")
   @@map("members")
@@ -325,6 +324,20 @@ model SanththaRate {
   setByAccount UserAccount? @relation(fields: [setBy], references: [id])
 
   @@map("sanththa_rates")
+}
+
+/// A member who chose to pay the sanththa for one year. Each year starts empty: that
+/// year's pooja sponsors owe it automatically, and anyone else is added here.
+model SanththaEnrolment {
+  memberId  Int      @map("member_id")
+  year      Int
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  member Member @relation(fields: [memberId], references: [partyId], onDelete: Cascade)
+
+  @@id([memberId, year])
+  @@index([year], map: "enrolments_year")
+  @@map("sanththa_enrolments")
 }
 
 model SanththaPayment {
