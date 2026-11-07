@@ -41,8 +41,8 @@ const VOUCHER_INCLUDE = {
     orderBy: { lineNo: 'asc' },
   },
   bankAccount: true,
-  createdByUser: { select: { id: true, party: { select: { nameTa: true, nameEn: true } } } },
-  decidedByUser: { select: { id: true, party: { select: { nameTa: true, nameEn: true } } } },
+  createdByUser: { select: { id: true, nameTa: true, nameEn: true } },
+  decidedByUser: { select: { id: true, nameTa: true, nameEn: true } },
 } satisfies Prisma.VoucherInclude;
 
 type VoucherRow = Prisma.VoucherGetPayload<{ include: typeof VOUCHER_INCLUDE }>;
@@ -723,9 +723,8 @@ export class VouchersService {
   }
 
   private toRecord(voucher: VoucherRow): VoucherRecordDto {
-    const actor = (
-      user: { id: string; party: { nameTa: string; nameEn: string | null } } | null,
-    ) => (user ? { id: user.id, name: user.party.nameEn ?? user.party.nameTa } : null);
+    const actor = (user: { id: string; nameTa: string; nameEn: string | null } | null) =>
+      user ? { id: user.id, name: user.nameEn ?? user.nameTa } : null;
 
     return {
       id: Number(voucher.id),

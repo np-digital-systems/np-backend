@@ -48,18 +48,15 @@ export class SearchService {
   private async users(q: string, take: number): Promise<SearchResultDto[]> {
     const rows = await this.prisma.userAccount.findMany({
       where: {
-        OR: [
-          { email: contains(q) },
-          { party: { nameTa: contains(q) } },
-          { party: { nameEn: contains(q) } },
-        ],
+        OR: [{ email: contains(q) }, { nameTa: contains(q) }, { nameEn: contains(q) }],
       },
       select: {
         id: true,
+        nameTa: true,
+        nameEn: true,
         email: true,
         role: true,
         isActive: true,
-        party: { select: { nameTa: true, nameEn: true, phone: true } },
       },
       take,
       orderBy: { createdAt: 'desc' },
@@ -68,7 +65,7 @@ export class SearchService {
     return rows.map((row) => ({
       id: row.id,
       type: 'User' as const,
-      title: row.party.nameEn ?? row.party.nameTa,
+      title: row.nameEn ?? row.nameTa,
       subtitle: `${row.role.toUpperCase()} · ${row.email}`,
       meta: row.isActive ? 'Active' : 'Inactive',
       ref: null,
