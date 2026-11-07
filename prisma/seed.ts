@@ -97,8 +97,8 @@ const PERMISSIONS = [
   ['event-costing:view', 'events', 'View what each pooja is expected to cost'],
   ['event-costing:manage', 'events', 'Set and revise pooja costings, and cost a day'],
 
-  ['sponsor:view', 'register', 'View the sponsor register'],
-  ['sponsor:manage', 'register', 'Enrol sponsors and see their contact details'],
+  ['sponsor:view', 'register', 'View the member register'],
+  ['sponsor:manage', 'register', 'Enrol members and see their contact details'],
   ['contribution:view', 'register', 'View the sanththa register'],
   ['contribution:record', 'register', 'Record subscription payments'],
   ['contribution:manage', 'register', 'Set the yearly rate and see contact details'],
@@ -136,7 +136,7 @@ const ROLES = [
   {
     code: AccountRole.member,
     label: 'Member',
-    description: 'A sponsor or devotee using the portal',
+    description: 'A member using the portal',
     isSystem: true,
     sortOrder: 4,
   },
