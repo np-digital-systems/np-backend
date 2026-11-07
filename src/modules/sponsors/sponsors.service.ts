@@ -19,6 +19,7 @@ import {
   SponsorRegisterRowDto,
   UpdateSponsorProfileDto,
 } from './dto/sponsor-registry.dto';
+import { owesSanththaIn } from '../sanththa/sanththa-year';
 
 const SPONSOR_INCLUDE = {
   party: {
@@ -36,11 +37,6 @@ const SPONSOR_INCLUDE = {
 type SponsorRow = Prisma.MemberGetPayload<{ include: typeof SPONSOR_INCLUDE }>;
 
 const round = (value: number) => Math.round(value * 100) / 100;
-
-// Pooja sponsors always owe the yearly sanththa; any other member only if they opted in.
-export const OWES_SANTHTHA = {
-  OR: [{ subscribes: true }, { party: { sponsorships: { some: {} } } }],
-} satisfies Prisma.MemberWhereInput;
 
 // A member is a party with a register entry: identity lives on the party, only membership fields here.
 @Injectable()
@@ -70,7 +66,7 @@ export class SponsorsService {
       isActive: query.isActive,
       AND: [
         search,
-        ...(query.outstandingOnly ? [OWES_SANTHTHA, { payments: { none: { year } } }] : []),
+        ...(query.outstandingOnly ? [owesSanththaIn(year), { payments: { none: { year } } }] : []),
       ],
     };
 
@@ -142,7 +138,6 @@ export class SponsorsService {
           partyId,
           memberNo: '',
           memberSince: dto.sponsorSince ? new Date(dto.sponsorSince) : new Date(),
-          subscribes: dto.subscribes ?? false,
           notes: dto.notes ?? null,
         },
         include: SPONSOR_INCLUDE,
@@ -187,7 +182,7 @@ export class SponsorsService {
 
       return tx.member.update({
         where: { partyId },
-        data: { subscribes: dto.subscribes, isActive: dto.isActive, notes: dto.notes },
+        data: { isActive: dto.isActive, notes: dto.notes },
         include: SPONSOR_INCLUDE,
       });
     });
@@ -236,8 +231,6 @@ export class SponsorsService {
       email: canSeeContact ? sponsor.party.email : null,
       address: canSeeContact ? sponsor.party.address : null,
       sponsorSince: sponsor.memberSince,
-      subscribes: sponsor.subscribes,
-      owesSanththa: sponsor.subscribes || sponsor.party._count.sponsorships > 0,
       isActive: sponsor.isActive,
       notes: sponsor.notes,
       sponsorships: sponsor.party._count.sponsorships,

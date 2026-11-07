@@ -27,10 +27,6 @@ export class SponsorDto {
   @ApiProperty({ nullable: true }) email!: string | null;
   @ApiProperty({ nullable: true }) address!: string | null;
   @ApiProperty() sponsorSince!: Date;
-  @ApiProperty({ description: 'Opted in to the yearly sanththa; pooja sponsors owe it regardless' })
-  subscribes!: boolean;
-  @ApiProperty({ description: 'Pooja sponsors always owe it; other members only if they opted in' })
-  owesSanththa!: boolean;
   @ApiProperty() isActive!: boolean;
   @ApiProperty({ nullable: true }) notes!: string | null;
   @ApiProperty({ description: 'Standing sponsorships across every observance' })
@@ -92,11 +88,6 @@ export class EnrolSponsorDto {
   @IsDateString()
   sponsorSince?: string;
 
-  @ApiPropertyOptional({ default: true, description: 'Set false for an exempt sponsor' })
-  @IsOptional()
-  @IsBoolean()
-  subscribes?: boolean;
-
   @ApiPropertyOptional()
   @IsOptional()
   @Transform(emptyToNull)
@@ -141,11 +132,6 @@ export class UpdateSponsorProfileDto {
   @IsString()
   @MaxLength(400)
   address?: string | null;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsBoolean()
-  subscribes?: boolean;
 
   @ApiPropertyOptional()
   @IsOptional()
