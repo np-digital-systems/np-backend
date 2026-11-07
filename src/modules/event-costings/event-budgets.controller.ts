@@ -5,6 +5,12 @@ import { RequirePermissions } from '../../common/decorators/permissions.decorato
 import { EventBudgetDto, ExpectedAmountsDto } from './dto/event-budget.dto';
 import { EventBudgetsService } from './event-budgets.service';
 
+/*
+ * Reading only. Vouchers against a pooja are written on the Receipt and Payment
+ * Voucher pages, where every other voucher the temple raises is written: a
+ * second way in meant two forms to keep in step and two places to look when one
+ * of them coded a line differently.
+ */
 @ApiTags('event-budgets')
 @ApiBearerAuth()
 @Controller('events/:eventId')
