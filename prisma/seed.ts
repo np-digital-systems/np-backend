@@ -2,7 +2,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { hash } from '@node-rs/argon2';
 
 import { PrismaClient } from '../src/generated/prisma/client';
-import { AccountRole, PartyKind, PartyType } from '../src/generated/prisma/enums';
+import { AccountRole } from '../src/generated/prisma/enums';
 
 process.loadEnvFile('.env');
 
@@ -97,8 +97,8 @@ const PERMISSIONS = [
   ['event-costing:view', 'events', 'View what each pooja is expected to cost'],
   ['event-costing:manage', 'events', 'Set and revise pooja costings, and cost a day'],
 
-  ['sponsor:view', 'register', 'View the sponsor register'],
-  ['sponsor:manage', 'register', 'Enrol sponsors and see their contact details'],
+  ['sponsor:view', 'register', 'View the member register'],
+  ['sponsor:manage', 'register', 'Enrol members and see their contact details'],
   ['contribution:view', 'register', 'View the sanththa register'],
   ['contribution:record', 'register', 'Record subscription payments'],
   ['contribution:manage', 'register', 'Set the yearly rate and see contact details'],
@@ -136,7 +136,7 @@ const ROLES = [
   {
     code: AccountRole.member,
     label: 'Member',
-    description: 'A sponsor or devotee using the portal',
+    description: 'A member using the portal',
     isSystem: true,
     sortOrder: 4,
   },
@@ -325,20 +325,10 @@ async function main(): Promise<void> {
   const staffed = await prisma.userAccount.count();
 
   if (staffed === 0) {
-    const party = await prisma.party.create({
-      data: {
-        type: PartyType.person,
-        nameTa: 'நிர்வாகி',
-        nameEn: 'Portal Administrator',
-        email,
-        roles: { create: [{ kind: PartyKind.staff }] },
-      },
-      select: { id: true },
-    });
-
     await prisma.userAccount.create({
       data: {
-        partyId: party.id,
+        nameTa: 'நிர்வாகி',
+        nameEn: 'Portal Administrator',
         email,
         passwordHash: await hash(password, { memoryCost: 19_456, timeCost: 2, parallelism: 1 }),
         role: AccountRole.admin,

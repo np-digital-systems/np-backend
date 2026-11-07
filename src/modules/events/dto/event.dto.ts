@@ -198,10 +198,10 @@ export class ContributorDto {
   @ApiProperty({ nullable: true }) nameEn!: string | null;
   @ApiProperty({ nullable: true }) phone!: string | null;
   @ApiProperty({
-    enum: ['gave-before', 'sponsor', 'vendor', 'devotee'],
+    enum: ['gave-before', 'member', 'vendor', 'staff'],
     description: 'Why they are being offered — presentation only, never stored',
   })
-  reason!: 'gave-before' | 'sponsor' | 'vendor' | 'devotee';
+  reason!: 'gave-before' | 'member' | 'vendor' | 'staff';
   @ApiProperty({ nullable: true, description: 'What they last gave to this observance' })
   lastAmount!: number | null;
   @ApiProperty({ nullable: true }) lastYear!: number | null;

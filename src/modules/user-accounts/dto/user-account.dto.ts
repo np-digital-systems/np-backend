@@ -1,14 +1,13 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Transform, Type } from 'class-transformer';
+import { Transform } from 'class-transformer';
 import {
   IsBoolean,
   IsEmail,
   IsEnum,
-  IsInt,
+  IsNotEmpty,
   IsOptional,
   IsString,
   MaxLength,
-  Min,
   MinLength,
 } from 'class-validator';
 
@@ -21,13 +20,9 @@ const lowerEmail = ({ value }: { value: unknown }) =>
 
 export class UserAccountDto {
   @ApiProperty() id!: string;
-  @ApiProperty({ description: 'The party this sign-in belongs to' }) partyId!: number;
-  @ApiProperty({ description: 'Read from the party — never edited here' }) nameTa!: string;
+  @ApiProperty() nameTa!: string;
   @ApiProperty({ nullable: true }) nameEn!: string | null;
-  @ApiProperty({ nullable: true, description: 'From the party; edit it in the directory' })
-  phone!: string | null;
-  @ApiProperty({ nullable: true, description: 'From the party; edit it in the directory' })
-  address!: string | null;
+  @ApiProperty({ nullable: true }) phone!: string | null;
   @ApiProperty() email!: string;
   @ApiProperty({ enum: AccountRole }) role!: AccountRole;
   @ApiProperty() isActive!: boolean;
@@ -35,27 +30,31 @@ export class UserAccountDto {
   @ApiProperty() createdAt!: Date;
 }
 
-// Pass an existing partyId, or a name to create the party first.
-export class CreateUserAccountDto {
-  @ApiPropertyOptional({ description: 'An existing party. Omit to register a new person' })
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  @Min(1)
-  partyId?: number;
+const trimmed = ({ value }: { value: unknown }) =>
+  typeof value === 'string' ? value.trim() : value;
 
-  @ApiPropertyOptional({ description: 'Required when no partyId is given' })
-  @IsOptional()
-  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
+// A sign-in stands alone; it is never a party in the books.
+export class CreateUserAccountDto {
+  @ApiProperty()
+  @Transform(trimmed)
   @IsString()
+  @IsNotEmpty({ message: 'Enter the user’s name' })
   @MaxLength(160)
-  nameTa?: string;
+  nameTa!: string;
 
   @ApiPropertyOptional()
   @IsOptional()
+  @Transform(trimmed)
   @IsString()
   @MaxLength(160)
   nameEn?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(trimmed)
+  @IsString()
+  @MaxLength(40)
+  phone?: string;
 
   @ApiProperty()
   @Transform(lowerEmail)
@@ -75,6 +74,28 @@ export class CreateUserAccountDto {
 }
 
 export class UpdateUserAccountDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(trimmed)
+  @IsString()
+  @IsNotEmpty({ message: 'Enter the user’s name' })
+  @MaxLength(160)
+  nameTa?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(trimmed)
+  @IsString()
+  @MaxLength(160)
+  nameEn?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @Transform(trimmed)
+  @IsString()
+  @MaxLength(40)
+  phone?: string;
+
   @ApiPropertyOptional()
   @IsOptional()
   @Transform(lowerEmail)

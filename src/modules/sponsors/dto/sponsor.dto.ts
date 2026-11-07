@@ -18,8 +18,6 @@ export class SponsorPartyDto {
   address!: string;
   @ApiProperty({ nullable: true, description: 'Set once they are on the sponsor register' })
   sponsorNo!: string | null;
-  @ApiProperty({ nullable: true, description: 'Set when this sponsor can also sign in' })
-  accountId!: string | null;
 }
 
 export class EventTypeSummaryDto {

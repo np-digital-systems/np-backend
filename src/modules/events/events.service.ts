@@ -32,8 +32,7 @@ const SPONSOR_SELECT = {
   phone: true,
   email: true,
   address: true,
-  account: { select: { id: true } },
-  sponsor: { select: { sponsorNo: true } },
+  member: { select: { memberNo: true } },
 } satisfies Prisma.PartySelect;
 
 const EVENT_INCLUDE = {
@@ -89,7 +88,7 @@ export class EventsService {
     return this.toRecord(event, canSeeContact);
   }
 
-  // Contributors are computed from past gifts to the same slot, then sponsors, vendors and devotees follow.
+  // Contributors are computed from past gifts to the same slot, then members, vendors and staff follow.
   async contributors(eventId: number, canSeeContact: boolean): Promise<ContributorDto[]> {
     const event = await this.prisma.event.findUnique({
       where: { id: eventId },
@@ -120,7 +119,7 @@ export class EventsService {
       this.prisma.party.findMany({
         where: {
           isActive: true,
-          OR: [{ sponsor: { isNot: null } }, { roles: { some: {} } }],
+          OR: [{ member: { isNot: null } }, { roles: { some: {} } }],
         },
         select: {
           id: true,
@@ -128,7 +127,7 @@ export class EventsService {
           nameEn: true,
           phone: true,
           roles: { select: { kind: true } },
-          sponsor: { select: { partyId: true } },
+          member: { select: { partyId: true } },
         },
         orderBy: { nameTa: 'asc' },
       }),
@@ -166,7 +165,7 @@ export class EventsService {
           nameEn: true,
           phone: true,
           roles: { select: { kind: true } },
-          sponsor: { select: { partyId: true } },
+          member: { select: { partyId: true } },
         },
       });
 
@@ -177,11 +176,11 @@ export class EventsService {
       const previous = history.get(party.id);
       const reason: ContributorDto['reason'] = previous
         ? 'gave-before'
-        : party.sponsor
-          ? 'sponsor'
+        : party.member
+          ? 'member'
           : party.roles.some((role) => role.kind === PartyKind.vendor)
             ? 'vendor'
-            : 'devotee';
+            : 'staff';
 
       return {
         partyId: party.id,
@@ -199,9 +198,9 @@ export class EventsService {
     // Past contributors first by amount, then everyone else by name.
     const ORDER: Record<ContributorDto['reason'], number> = {
       'gave-before': 0,
-      sponsor: 1,
+      member: 1,
       vendor: 2,
-      devotee: 3,
+      staff: 3,
     };
 
     return rows.sort(
@@ -606,8 +605,7 @@ export class EventsService {
       email: canSeeContact ? row.email : null,
       phone: canSeeContact ? row.phone : null,
       address: row.address ?? '',
-      sponsorNo: row.sponsor?.sponsorNo ?? null,
-      accountId: row.account?.id ?? null,
+      sponsorNo: row.member?.memberNo ?? null,
     };
   }
 

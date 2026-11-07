@@ -15,6 +15,7 @@ import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { VouchersService } from '../vouchers/vouchers.service';
 import { SettingsService } from '../settings/settings.service';
+import { owesSanththaIn, sponsoredOccurrencesIn } from './sanththa-year';
 import {
   QueryPaymentsDto,
   QueryRegisterDto,
@@ -31,13 +32,20 @@ import {
 } from './dto/sanththa.dto';
 
 const SPONSOR_INCLUDE = {
-  party: { select: { nameTa: true, nameEn: true, phone: true, address: true } },
-} satisfies Prisma.SponsorInclude;
+  party: {
+    select: {
+      nameTa: true,
+      nameEn: true,
+      phone: true,
+      address: true,
+    },
+  },
+} satisfies Prisma.MemberInclude;
 
-type SponsorRow = Prisma.SponsorGetPayload<{ include: typeof SPONSOR_INCLUDE }>;
+type SponsorRow = Prisma.MemberGetPayload<{ include: typeof SPONSOR_INCLUDE }>;
 
 const PAYMENT_INCLUDE = {
-  sponsor: { include: SPONSOR_INCLUDE },
+  member: { include: SPONSOR_INCLUDE },
   receiptVoucher: { select: { id: true, ref: true, status: true, manualVoucherNo: true } },
 } satisfies Prisma.SanththaPaymentInclude;
 
@@ -73,25 +81,40 @@ export class SanththaService {
     canSeeContact: boolean,
   ): Promise<PageDto<SanththaRegisterRowDto>> {
     const year = query.year ?? new Date().getFullYear();
+    const owes = owesSanththaIn(year);
 
-    const where: Prisma.SponsorWhereInput = {
+    // The year's list: those who owe it, plus anyone who paid that year regardless.
+    const where: Prisma.MemberWhereInput = {
       isActive: true,
-      ...(query.outstandingOnly ? { subscribes: true, payments: { none: { year } } } : {}),
+      ...(query.outstandingOnly
+        ? { AND: [owes, { payments: { none: { year } } }] }
+        : { OR: [owes, { payments: { some: { year } } }] }),
     };
 
     const [sponsors, total] = await this.prisma.$transaction([
-      this.prisma.sponsor.findMany({
+      this.prisma.member.findMany({
         where,
-        include: { ...SPONSOR_INCLUDE, payments: { select: { year: true, amount: true } } },
-        orderBy: { sponsorNo: 'asc' },
+        include: {
+          party: {
+            select: {
+              ...SPONSOR_INCLUDE.party.select,
+              eventsSponsored: sponsoredOccurrencesIn(year),
+            },
+          },
+          payments: { select: { year: true, amount: true } },
+          enrolments: { where: { year }, select: { year: true } },
+        },
+        orderBy: { memberNo: 'asc' },
         skip: query.skip,
         take: query.limit,
       }),
-      this.prisma.sponsor.count({ where }),
+      this.prisma.member.count({ where }),
     ]);
 
     const rows = sponsors.map((sponsor) => ({
       ...this.toSponsor(sponsor, canSeeContact),
+      isPoojaSponsor: sponsor.party.eventsSponsored.length > 0,
+      isEnrolled: sponsor.enrolments.length > 0,
       paidYears: sponsor.payments.map((payment) => payment.year).sort((a, b) => b - a),
       totalPaid: round(
         sponsor.payments.reduce((sum, payment) => sum + toRupees(payment.amount), 0),
@@ -103,9 +126,12 @@ export class SanththaService {
   }
 
   async summary(year = new Date().getFullYear()): Promise<SanththaSummaryDto> {
-    const [sponsors, subscribing, payments, rate] = await Promise.all([
-      this.prisma.sponsor.count({ where: { isActive: true } }),
-      this.prisma.sponsor.count({ where: { isActive: true, subscribes: true } }),
+    const [sponsors, subscribing, outstanding, payments, rate] = await Promise.all([
+      this.prisma.member.count({ where: { isActive: true } }),
+      this.prisma.member.count({ where: { isActive: true, ...owesSanththaIn(year) } }),
+      this.prisma.member.count({
+        where: { isActive: true, AND: [owesSanththaIn(year), { payments: { none: { year } } }] },
+      }),
       this.prisma.sanththaPayment.aggregate({
         where: { year },
         _count: { _all: true },
@@ -122,7 +148,7 @@ export class SanththaService {
       sponsors,
       subscribing,
       paid: payments._count._all,
-      outstanding: Math.max(0, subscribing - payments._count._all),
+      outstanding,
       collected: toRupees(payments._sum.amount),
       expected: amount === null ? 0 : round(amount * subscribing),
     };
@@ -163,7 +189,7 @@ export class SanththaService {
   ): Promise<PageDto<SanththaPaymentDto>> {
     const where: Prisma.SanththaPaymentWhereInput = {
       year: query.year,
-      sponsorId: query.sponsorId,
+      memberId: query.sponsorId,
     };
 
     const [rows, total] = await this.prisma.$transaction([
@@ -184,23 +210,21 @@ export class SanththaService {
   }
 
   async record(dto: RecordPaymentDto, context: ActorContext): Promise<SanththaPaymentDto> {
-    const sponsor = await this.prisma.sponsor.findUnique({
+    const sponsor = await this.prisma.member.findUnique({
       where: { partyId: dto.sponsorId },
       include: SPONSOR_INCLUDE,
     });
 
-    if (!sponsor) throw new NotFoundException(`Party ${dto.sponsorId} is not a sponsor`);
-    if (!sponsor.subscribes) {
-      throw new BadRequestException(`${sponsor.sponsorNo} is exempt from the annual sanththa`);
-    }
+    // Any member may pay; it is only required of pooja sponsors and members who opted in.
+    if (!sponsor) throw new NotFoundException(`Party ${dto.sponsorId} is not a member`);
 
     const existing = await this.prisma.sanththaPayment.findUnique({
-      where: { sponsorId_year: { sponsorId: dto.sponsorId, year: dto.year } },
+      where: { memberId_year: { memberId: dto.sponsorId, year: dto.year } },
       select: { id: true },
     });
 
     if (existing) {
-      throw new ConflictException(`${sponsor.sponsorNo} has already paid for ${dto.year}`);
+      throw new ConflictException(`${sponsor.memberNo} has already paid for ${dto.year}`);
     }
 
     const amount = dto.amount ?? (await this.rateForOrFail(dto.year));
@@ -213,7 +237,7 @@ export class SanththaService {
 
     const payment = await this.prisma.sanththaPayment.create({
       data: {
-        sponsorId: dto.sponsorId,
+        memberId: dto.sponsorId,
         year: dto.year,
         amount,
         paidOn: new Date(dto.paidOn),
@@ -228,7 +252,7 @@ export class SanththaService {
       action: 'create',
       entity: 'sanththa_payment',
       entityRef: String(payment.id),
-      summary: `Recorded ${amount} from ${sponsor.sponsorNo} for ${dto.year}`,
+      summary: `Recorded ${amount} from ${sponsor.memberNo} for ${dto.year}`,
     });
 
     return this.toPayment(payment, true);
@@ -251,7 +275,7 @@ export class SanththaService {
       {
         kind: VoucherKind.receipt,
         date: dto.paidOn,
-        description: describeSubscription(dto.year, sponsor.sponsorNo),
+        description: describeSubscription(dto.year, sponsor.memberNo),
         mode: dto.mode,
         party: sponsor.party.nameTa,
         partyId: sponsor.partyId,
@@ -401,10 +425,10 @@ export class SanththaService {
         {
           kind: VoucherKind.receipt,
           date: paidOn,
-          description: describeSubscription(before.year, before.sponsor.sponsorNo),
+          description: describeSubscription(before.year, before.member.memberNo),
           mode,
-          party: before.sponsor.party.nameTa,
-          partyId: before.sponsorId,
+          party: before.member.party.nameTa,
+          partyId: before.memberId,
           manualVoucherNo,
           lines: [
             {
@@ -432,7 +456,7 @@ export class SanththaService {
       action: 'update',
       entity: 'sanththa_payment',
       entityRef: String(id),
-      summary: `Corrected ${before.sponsor.sponsorNo}'s ${before.year} subscription`,
+      summary: `Corrected ${before.member.memberNo}'s ${before.year} subscription`,
       diff: AuditService.diff(
         { amount: toRupees(before.amount), paidOn: before.paidOn, mode: before.mode },
         { amount, paidOn: new Date(paidOn), mode },
@@ -475,24 +499,83 @@ export class SanththaService {
     }
   }
 
+  // A member who chooses to pay this year; next year's list starts without them.
+  async enrol(memberId: number, year: number, context: ActorContext): Promise<void> {
+    const member = await this.prisma.member.findUnique({
+      where: { partyId: memberId },
+      select: { memberNo: true, isActive: true },
+    });
+
+    if (!member) throw new NotFoundException(`Party ${memberId} is not a member`);
+    if (!member.isActive) throw new BadRequestException(`${member.memberNo} is retired`);
+
+    const existing = await this.prisma.sanththaEnrolment.findUnique({
+      where: { memberId_year: { memberId, year } },
+    });
+
+    if (existing) {
+      throw new ConflictException(`${member.memberNo} is already on the ${year} sanththa list`);
+    }
+
+    await this.prisma.sanththaEnrolment.create({ data: { memberId, year } });
+
+    await this.audit.record(context, {
+      action: 'create',
+      entity: 'sanththa_enrolment',
+      entityRef: `${memberId}:${year}`,
+      summary: `Added ${member.memberNo} to the ${year} sanththa list`,
+    });
+  }
+
+  // Pooja sponsors stay on the list whatever this does; they owe it by sponsoring.
+  async unenrol(memberId: number, year: number, context: ActorContext): Promise<void> {
+    const enrolment = await this.prisma.sanththaEnrolment.findUnique({
+      where: { memberId_year: { memberId, year } },
+      include: { member: { select: { memberNo: true } } },
+    });
+
+    if (!enrolment) {
+      throw new NotFoundException(`That member is not on the ${year} sanththa list`);
+    }
+
+    const paid = await this.prisma.sanththaPayment.findUnique({
+      where: { memberId_year: { memberId, year } },
+      select: { id: true },
+    });
+
+    if (paid) {
+      throw new ConflictException(
+        `${enrolment.member.memberNo} has already paid for ${year}; correct the payment first`,
+      );
+    }
+
+    await this.prisma.sanththaEnrolment.delete({ where: { memberId_year: { memberId, year } } });
+
+    await this.audit.record(context, {
+      action: 'delete',
+      entity: 'sanththa_enrolment',
+      entityRef: `${memberId}:${year}`,
+      summary: `Removed ${enrolment.member.memberNo} from the ${year} sanththa list`,
+    });
+  }
+
   private toSponsor(sponsor: SponsorRow, canSeeContact: boolean): SanththaSponsorDto {
     return {
       partyId: sponsor.partyId,
-      sponsorNo: sponsor.sponsorNo,
+      sponsorNo: sponsor.memberNo,
       name: sponsor.party.nameEn ?? sponsor.party.nameTa,
       nameTa: sponsor.party.nameTa,
       phone: canSeeContact ? sponsor.party.phone : null,
       address: canSeeContact ? sponsor.party.address : null,
-      sponsorSince: sponsor.sponsorSince.toISOString().slice(0, 10),
-      subscribes: sponsor.subscribes,
+      sponsorSince: sponsor.memberSince.toISOString().slice(0, 10),
     };
   }
 
   private toPayment(payment: PaymentRow, canSeeContact: boolean): SanththaPaymentDto {
     return {
       id: payment.id,
-      sponsorId: payment.sponsorId,
-      sponsor: this.toSponsor(payment.sponsor, canSeeContact),
+      sponsorId: payment.memberId,
+      sponsor: this.toSponsor(payment.member, canSeeContact),
       year: payment.year,
       amount: toRupees(payment.amount),
       paidOn: payment.paidOn.toISOString().slice(0, 10),

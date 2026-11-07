@@ -1,5 +1,4 @@
 import {
-  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -10,7 +9,7 @@ import { hash } from '@node-rs/argon2';
 import { PageDto, PageMetaDto } from '../../common/dto/page.dto';
 import { ActorContext } from '../../common/types/authenticated-user';
 import { Prisma } from '../../generated/prisma/client';
-import { AccountRole, AuditAction, PartyType } from '../../generated/prisma/enums';
+import { AccountRole, AuditAction } from '../../generated/prisma/enums';
 import { AuditService } from '../../infrastructure/audit/audit.service';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { ARGON_OPTIONS } from '../auth/auth.service';
@@ -25,18 +24,19 @@ import {
 
 const ACCOUNT_SELECT = {
   id: true,
-  partyId: true,
+  nameTa: true,
+  nameEn: true,
+  phone: true,
   email: true,
   role: true,
   isActive: true,
   lastLoginAt: true,
   createdAt: true,
-  party: { select: { nameTa: true, nameEn: true, phone: true, address: true } },
 } satisfies Prisma.UserAccountSelect;
 
 type AccountRow = Prisma.UserAccountGetPayload<{ select: typeof ACCOUNT_SELECT }>;
 
-// Credentials only; name and contact details are edited on the party.
+// A sign-in carries its own name; it is never a party in the books.
 @Injectable()
 export class UserAccountsService {
   constructor(
@@ -51,8 +51,8 @@ export class UserAccountsService {
       OR: query.search
         ? [
             { email: { contains: query.search, mode: 'insensitive' } },
-            { party: { nameTa: { contains: query.search, mode: 'insensitive' } } },
-            { party: { nameEn: { contains: query.search, mode: 'insensitive' } } },
+            { nameTa: { contains: query.search, mode: 'insensitive' } },
+            { nameEn: { contains: query.search, mode: 'insensitive' } },
           ]
         : undefined,
     };
@@ -83,31 +83,18 @@ export class UserAccountsService {
   }
 
   async create(dto: CreateUserAccountDto, context: ActorContext): Promise<UserAccountDto> {
-    if (!dto.partyId && !dto.nameTa) {
-      throw new BadRequestException('Give either an existing partyId or a name to register');
-    }
-
     const passwordHash = await hash(dto.password, ARGON_OPTIONS);
 
-    const account = await this.prisma.$transaction(async (tx) => {
-      const partyId = dto.partyId ?? (await this.registerPerson(tx, dto));
-
-      const party = await tx.party.findUnique({
-        where: { id: partyId },
-        select: { id: true, type: true, isActive: true, account: { select: { id: true } } },
-      });
-
-      if (!party) throw new NotFoundException(`Party ${partyId} was not found`);
-      if (party.type !== PartyType.person) {
-        throw new BadRequestException('Only a person can hold a sign-in');
-      }
-      if (!party.isActive) throw new BadRequestException('That party is no longer active');
-      if (party.account) throw new ConflictException('That party already has a sign-in');
-
-      return tx.userAccount.create({
-        data: { partyId, email: dto.email, passwordHash, role: dto.role },
-        select: ACCOUNT_SELECT,
-      });
+    const account = await this.prisma.userAccount.create({
+      data: {
+        nameTa: dto.nameTa,
+        nameEn: dto.nameEn || null,
+        phone: dto.phone || null,
+        email: dto.email,
+        passwordHash,
+        role: dto.role,
+      },
+      select: ACCOUNT_SELECT,
     });
 
     await this.audit.record(context, {
@@ -129,7 +116,12 @@ export class UserAccountsService {
 
     const account = await this.prisma.userAccount.update({
       where: { id },
-      data: { email: dto.email },
+      data: {
+        nameTa: dto.nameTa,
+        nameEn: dto.nameEn === undefined ? undefined : dto.nameEn || null,
+        phone: dto.phone === undefined ? undefined : dto.phone || null,
+        email: dto.email,
+      },
       select: ACCOUNT_SELECT,
     });
 
@@ -252,23 +244,6 @@ export class UserAccountsService {
     return toDto(account);
   }
 
-  private async registerPerson(
-    tx: Prisma.TransactionClient,
-    dto: CreateUserAccountDto,
-  ): Promise<number> {
-    const party = await tx.party.create({
-      data: {
-        type: PartyType.person,
-        nameTa: dto.nameTa!,
-        nameEn: dto.nameEn ?? null,
-        email: dto.email,
-      },
-      select: { id: true },
-    });
-
-    return party.id;
-  }
-
   private assertNotSelf(id: string, context: ActorContext, message: string): void {
     if (id === context.actor.id) throw new ForbiddenException(message);
   }
@@ -285,11 +260,9 @@ export class UserAccountsService {
 function toDto(account: AccountRow): UserAccountDto {
   return {
     id: account.id,
-    partyId: account.partyId,
-    nameTa: account.party.nameTa,
-    nameEn: account.party.nameEn,
-    phone: account.party.phone,
-    address: account.party.address,
+    nameTa: account.nameTa,
+    nameEn: account.nameEn,
+    phone: account.phone,
     email: account.email,
     role: account.role,
     isActive: account.isActive,
@@ -299,5 +272,5 @@ function toDto(account: AccountRow): UserAccountDto {
 }
 
 function displayName(account: AccountRow): string {
-  return account.party.nameEn ?? account.party.nameTa;
+  return account.nameEn ?? account.nameTa;
 }

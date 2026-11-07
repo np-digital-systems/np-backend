@@ -19,6 +19,7 @@ import {
   SponsorRegisterRowDto,
   UpdateSponsorProfileDto,
 } from './dto/sponsor-registry.dto';
+import { owesSanththaIn } from '../sanththa/sanththa-year';
 
 const SPONSOR_INCLUDE = {
   party: {
@@ -31,13 +32,13 @@ const SPONSOR_INCLUDE = {
       _count: { select: { sponsorships: true } },
     },
   },
-} satisfies Prisma.SponsorInclude;
+} satisfies Prisma.MemberInclude;
 
-type SponsorRow = Prisma.SponsorGetPayload<{ include: typeof SPONSOR_INCLUDE }>;
+type SponsorRow = Prisma.MemberGetPayload<{ include: typeof SPONSOR_INCLUDE }>;
 
 const round = (value: number) => Math.round(value * 100) / 100;
 
-// A sponsor is a party with a profile: identity lives on the party, only sponsor fields here.
+// A member is a party with a register entry: identity lives on the party, only membership fields here.
 @Injectable()
 export class SponsorsService {
   constructor(
@@ -51,34 +52,36 @@ export class SponsorsService {
   ): Promise<PageDto<SponsorRegisterRowDto>> {
     const year = query.year ?? new Date().getFullYear();
 
-    const where: Prisma.SponsorWhereInput = {
+    const search = query.search
+      ? {
+          OR: [
+            { memberNo: { contains: query.search, mode: 'insensitive' as const } },
+            { party: { nameTa: { contains: query.search, mode: 'insensitive' as const } } },
+            { party: { nameEn: { contains: query.search, mode: 'insensitive' as const } } },
+          ],
+        }
+      : {};
+
+    const where: Prisma.MemberWhereInput = {
       isActive: query.isActive,
-      party: query.search
-        ? {
-            OR: [
-              { nameTa: { contains: query.search, mode: 'insensitive' } },
-              { nameEn: { contains: query.search, mode: 'insensitive' } },
-            ],
-          }
-        : undefined,
-      ...(query.outstandingOnly ? { subscribes: true, payments: { none: { year } } } : {}),
-      ...(query.search
-        ? { OR: [{ sponsorNo: { contains: query.search, mode: 'insensitive' } }] }
-        : {}),
+      AND: [
+        search,
+        ...(query.outstandingOnly ? [owesSanththaIn(year), { payments: { none: { year } } }] : []),
+      ],
     };
 
     const [rows, total] = await this.prisma.$transaction([
-      this.prisma.sponsor.findMany({
+      this.prisma.member.findMany({
         where,
         include: {
           ...SPONSOR_INCLUDE,
           payments: { select: { year: true, amount: true } },
         },
-        orderBy: { sponsorNo: 'asc' },
+        orderBy: { memberNo: 'asc' },
         skip: query.skip,
         take: query.limit,
       }),
-      this.prisma.sponsor.count({ where }),
+      this.prisma.member.count({ where }),
     ]);
 
     const data = rows.map((row) => ({
@@ -92,7 +95,7 @@ export class SponsorsService {
   }
 
   async findOneOrFail(partyId: number, canSeeContact = true): Promise<SponsorDto> {
-    const sponsor = await this.prisma.sponsor.findUnique({
+    const sponsor = await this.prisma.member.findUnique({
       where: { partyId },
       include: SPONSOR_INCLUDE,
     });
@@ -112,7 +115,7 @@ export class SponsorsService {
 
       const party = await tx.party.findUnique({
         where: { id: partyId },
-        select: { id: true, type: true, isActive: true, sponsor: { select: { partyId: true } } },
+        select: { id: true, type: true, isActive: true, member: { select: { partyId: true } } },
       });
 
       if (!party) throw new NotFoundException(`Party ${partyId} was not found`);
@@ -120,7 +123,7 @@ export class SponsorsService {
         throw new BadRequestException('Only a person can be enrolled as a sponsor');
       }
       if (!party.isActive) throw new BadRequestException('That party is no longer active');
-      if (party.sponsor) throw new ConflictException('That party is already a sponsor');
+      if (party.member) throw new ConflictException('That party is already a sponsor');
 
       if (dto.partyId) {
         await tx.party.update({
@@ -130,12 +133,11 @@ export class SponsorsService {
         });
       }
 
-      return tx.sponsor.create({
+      return tx.member.create({
         data: {
           partyId,
-          sponsorNo: '',
-          sponsorSince: dto.sponsorSince ? new Date(dto.sponsorSince) : new Date(),
-          subscribes: dto.subscribes ?? true,
+          memberNo: '',
+          memberSince: dto.sponsorSince ? new Date(dto.sponsorSince) : new Date(),
           notes: dto.notes ?? null,
         },
         include: SPONSOR_INCLUDE,
@@ -146,7 +148,7 @@ export class SponsorsService {
       action: 'create',
       entity: 'sponsor',
       entityRef: String(sponsor.partyId),
-      summary: `Enrolled ${this.nameOf(sponsor)} on the sponsor register as ${sponsor.sponsorNo}`,
+      summary: `Enrolled ${this.nameOf(sponsor)} on the member register as ${sponsor.memberNo}`,
     });
 
     return this.toDto(sponsor, true);
@@ -158,14 +160,12 @@ export class SponsorsService {
     dto: UpdateSponsorProfileDto,
     context: ActorContext,
   ): Promise<SponsorDto> {
-    const before = await this.prisma.sponsor.findUnique({
+    const before = await this.prisma.member.findUnique({
       where: { partyId },
       include: SPONSOR_INCLUDE,
     });
 
     if (!before) throw new NotFoundException(`Party ${partyId} is not a sponsor`);
-
-    if (dto.subscribes === false) await this.assertNoPaymentsBlockExemption(partyId);
 
     const sponsor = await this.prisma.$transaction(async (tx) => {
       await tx.party.update({
@@ -180,9 +180,9 @@ export class SponsorsService {
         select: { id: true },
       });
 
-      return tx.sponsor.update({
+      return tx.member.update({
         where: { partyId },
-        data: { subscribes: dto.subscribes, isActive: dto.isActive, notes: dto.notes },
+        data: { isActive: dto.isActive, notes: dto.notes },
         include: SPONSOR_INCLUDE,
       });
     });
@@ -221,29 +221,16 @@ export class SponsorsService {
     return party.id;
   }
 
-  // Refuse exemption after they've paid this year, or the payment would be orphaned.
-  private async assertNoPaymentsBlockExemption(partyId: number): Promise<void> {
-    const year = new Date().getFullYear();
-    const paid = await this.prisma.sanththaPayment.count({ where: { sponsorId: partyId, year } });
-
-    if (paid > 0) {
-      throw new ConflictException(
-        `This sponsor has already paid the ${year} sanththa; reverse the payment before making them exempt`,
-      );
-    }
-  }
-
   private toDto(sponsor: SponsorRow, canSeeContact: boolean): SponsorDto {
     return {
       partyId: sponsor.partyId,
-      sponsorNo: sponsor.sponsorNo,
+      sponsorNo: sponsor.memberNo,
       name: sponsor.party.nameTa,
       nameEn: sponsor.party.nameEn ?? '',
       phone: canSeeContact ? sponsor.party.phone : null,
       email: canSeeContact ? sponsor.party.email : null,
       address: canSeeContact ? sponsor.party.address : null,
-      sponsorSince: sponsor.sponsorSince,
-      subscribes: sponsor.subscribes,
+      sponsorSince: sponsor.memberSince,
       isActive: sponsor.isActive,
       notes: sponsor.notes,
       sponsorships: sponsor.party._count.sponsorships,

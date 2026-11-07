@@ -27,8 +27,6 @@ export class SanththaSponsorDto {
   @ApiProperty({ nullable: true }) phone!: string | null;
   @ApiProperty({ nullable: true }) address!: string | null;
   @ApiProperty({ nullable: true }) sponsorSince!: string | null;
-  @ApiProperty({ description: 'Whether the yearly subscription is due from them' })
-  subscribes!: boolean;
 }
 
 export class SanththaPaymentDto {
@@ -58,6 +56,10 @@ export class SanththaPaymentDto {
 }
 
 export class SanththaRegisterRowDto extends SanththaSponsorDto {
+  @ApiProperty({ description: 'Sponsors a pooja this year, so owes the sanththa' })
+  isPoojaSponsor!: boolean;
+  @ApiProperty({ description: 'Added to this year’s sanththa list' })
+  isEnrolled!: boolean;
   @ApiProperty({ description: 'Years this sponsor has paid for' }) paidYears!: number[];
   @ApiProperty() totalPaid!: number;
   @ApiProperty({ description: 'Whether the year being asked about is settled' })
@@ -218,4 +220,19 @@ export class QueryPaymentsDto extends PaginationQueryDto {
   @Type(() => Number)
   @IsInt()
   sponsorId?: number;
+}
+
+export class EnrolForYearDto {
+  @ApiProperty({ description: 'The member — their party id' })
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  memberId!: number;
+
+  @ApiProperty({ minimum: 2000, maximum: 2100 })
+  @Type(() => Number)
+  @IsInt()
+  @Min(2000)
+  @Max(2100)
+  year!: number;
 }
