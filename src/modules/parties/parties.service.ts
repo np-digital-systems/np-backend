@@ -10,7 +10,7 @@ import { CreatePartyDto, PartyRecordDto, QueryPartiesDto, UpdatePartyDto } from 
 
 const PARTY_INCLUDE = {
   roles: true,
-  sponsor: { select: { partyId: true } },
+  member: { select: { partyId: true } },
   account: { select: { id: true } },
 } satisfies Prisma.PartyInclude;
 
@@ -18,7 +18,7 @@ type PartyRow = Prisma.PartyGetPayload<{ include: typeof PARTY_INCLUDE }>;
 
 const round = (value: number) => Math.round(value * 100) / 100;
 
-const KIND_ORDER: PartyKind[] = [PartyKind.devotee, PartyKind.vendor, PartyKind.staff];
+const KIND_ORDER: PartyKind[] = [PartyKind.vendor, PartyKind.staff];
 
 function kindsOf(party: PartyRow): PartyKind[] {
   return KIND_ORDER.filter((kind) => party.roles.some((role) => role.kind === kind));
@@ -134,7 +134,7 @@ export class PartiesService {
       // `some`: a party can hold several roles.
       roles: query.kind ? { some: { kind: query.kind } } : undefined,
       type: query.type,
-      sponsor: query.sponsorsOnly ? { isNot: null } : undefined,
+      member: query.sponsorsOnly ? { isNot: null } : undefined,
       isActive: query.isActive,
       OR: query.search
         ? [
@@ -182,7 +182,7 @@ export class PartiesService {
       name: party.nameTa,
       nameEn: party.nameEn ?? '',
       roles: kindsOf(party),
-      isSponsor: party.sponsor !== null,
+      isSponsor: party.member !== null,
       accountId: party.account?.id ?? null,
       phone: party.phone,
       email: party.email,
