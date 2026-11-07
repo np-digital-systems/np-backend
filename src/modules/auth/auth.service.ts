@@ -20,13 +20,13 @@ import { TokenService } from './token.service';
 
 export const ARGON_OPTIONS = { memoryCost: 19_456, timeCost: 2, parallelism: 1 } as const;
 
-// Names live on the party, so identity reads include it.
 const IDENTITY_SELECT = {
   id: true,
+  nameTa: true,
+  nameEn: true,
   email: true,
   role: true,
   isActive: true,
-  party: { select: { nameTa: true, nameEn: true } },
 } satisfies Prisma.UserAccountSelect;
 
 type IdentityRow = Prisma.UserAccountGetPayload<{ select: typeof IDENTITY_SELECT }>;
@@ -61,8 +61,8 @@ export class AuthService {
 
     return {
       id: account.id,
-      nameTa: account.party.nameTa,
-      nameEn: account.party.nameEn,
+      nameTa: account.nameTa,
+      nameEn: account.nameEn,
       email: account.email,
       role: account.role,
     };
@@ -287,8 +287,8 @@ export class AuthService {
   private toAuthUser(account: IdentityRow, permissions: string[]): AuthUserDto {
     return {
       id: account.id,
-      nameTa: account.party.nameTa,
-      nameEn: account.party.nameEn,
+      nameTa: account.nameTa,
+      nameEn: account.nameEn,
       email: account.email,
       role: account.role,
       permissions,
@@ -296,7 +296,7 @@ export class AuthService {
   }
 
   private displayName(account: IdentityRow): string {
-    return account.party.nameEn ?? account.party.nameTa;
+    return account.nameEn ?? account.nameTa;
   }
 
   private async burnTime(): Promise<false> {
