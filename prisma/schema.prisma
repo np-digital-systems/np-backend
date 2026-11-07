@@ -30,8 +30,8 @@ enum PartyType {
 
 /// What a party is to the temple, as a set rather than a single label.
 /// There is no `sponsor` here: a row in `sponsors` is the sponsor role.
+/// Membership is not a role: it is the member register (`sponsors`), so it can't disagree with it.
 enum PartyKind {
-  devotee
   vendor
   staff
 
@@ -266,7 +266,7 @@ model Party {
   updatedAt   DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   roles                PartyRole[]
-  sponsor              Sponsor?
+  member               Member?
   account              UserAccount?
   vouchers             Voucher[]
   ledgerLines          LedgerEntry[]
@@ -296,21 +296,23 @@ model PartyRole {
 
 /// A sponsor profile. The primary key is the foreign key, so the 1:1 with a
 /// party cannot be broken and no name is stored twice.
-model Sponsor {
-  partyId      Int      @id @map("party_id")
-  sponsorNo    String   @unique(map: "sponsors_sponsor_no_key") @map("sponsor_no")
-  sponsorSince DateTime @map("sponsor_since") @db.Date
-  subscribes   Boolean  @default(true)
-  isActive     Boolean  @default(true) @map("is_active")
-  notes        String?
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+/// The temple's member register. Pooja sponsors are members who always owe the
+/// yearly sanththa; for anyone else it is optional, which `subscribes` records.
+model Member {
+  partyId     Int      @id @map("party_id")
+  memberNo    String   @unique(map: "members_member_no_key") @map("member_no")
+  memberSince DateTime @map("member_since") @db.Date
+  subscribes  Boolean  @default(false)
+  isActive    Boolean  @default(true) @map("is_active")
+  notes       String?
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
   party    Party             @relation(fields: [partyId], references: [id], onDelete: Cascade)
   payments SanththaPayment[]
 
-  @@index([isActive], map: "sponsors_active")
-  @@map("sponsors")
+  @@index([isActive], map: "members_active")
+  @@map("members")
 }
 
 /// The subscription due from every sponsor for a year. Held per year so raising
@@ -328,7 +330,7 @@ model SanththaRate {
 
 model SanththaPayment {
   id               Int         @id @default(autoincrement())
-  sponsorId        Int         @map("sponsor_id")
+  memberId         Int         @map("member_id")
   year             Int
   amount           Decimal     @db.Decimal(12, 2)
   paidOn           DateTime    @map("paid_on") @db.Date
@@ -337,13 +339,13 @@ model SanththaPayment {
   collectedBy      String      @map("collected_by") @db.Uuid
   createdAt        DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  sponsor         Sponsor     @relation(fields: [sponsorId], references: [partyId])
+  member          Member      @relation(fields: [memberId], references: [partyId])
   collectedByUser UserAccount @relation("SanththaCollector", fields: [collectedBy], references: [id])
   receiptVoucher  Voucher?    @relation(fields: [receiptVoucherId], references: [id])
 
-  @@unique([sponsorId, year], map: "one_payment_per_sponsor_per_year")
+  @@unique([memberId, year], map: "one_payment_per_member_per_year")
   @@index([year], map: "payments_year")
-  @@index([sponsorId], map: "payments_sponsor")
+  @@index([memberId], map: "payments_member")
   @@map("sanththa_payments")
 }
 
