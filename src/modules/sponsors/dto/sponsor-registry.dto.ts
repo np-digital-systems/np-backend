@@ -27,8 +27,10 @@ export class SponsorDto {
   @ApiProperty({ nullable: true }) email!: string | null;
   @ApiProperty({ nullable: true }) address!: string | null;
   @ApiProperty() sponsorSince!: Date;
-  @ApiProperty({ description: 'Whether the annual sanththa is due from them' })
+  @ApiProperty({ description: 'Opted in to the yearly sanththa; pooja sponsors owe it regardless' })
   subscribes!: boolean;
+  @ApiProperty({ description: 'Pooja sponsors always owe it; other members only if they opted in' })
+  owesSanththa!: boolean;
   @ApiProperty() isActive!: boolean;
   @ApiProperty({ nullable: true }) notes!: string | null;
   @ApiProperty({ description: 'Standing sponsorships across every observance' })
