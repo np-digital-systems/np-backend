@@ -78,31 +78,39 @@ export class SearchService {
   }
 
   private async members(q: string, take: number): Promise<SearchResultDto[]> {
-    const rows = await this.prisma.sponsor.findMany({
+    const rows = await this.prisma.member.findMany({
       where: {
         OR: [
-          { sponsorNo: contains(q) },
+          { memberNo: contains(q) },
           { party: { nameTa: contains(q) } },
           { party: { nameEn: contains(q) } },
         ],
       },
       select: {
         partyId: true,
-        sponsorNo: true,
+        memberNo: true,
         subscribes: true,
-        party: { select: { nameTa: true, nameEn: true, address: true } },
+        party: {
+          select: {
+            nameTa: true,
+            nameEn: true,
+            address: true,
+            _count: { select: { sponsorships: true } },
+          },
+        },
       },
       take,
-      orderBy: { sponsorNo: 'asc' },
+      orderBy: { memberNo: 'asc' },
     });
 
     return rows.map((row) => ({
       id: String(row.partyId),
       type: 'Sanththa' as const,
       title: row.party.nameEn ?? row.party.nameTa,
-      subtitle: row.party.address || 'Sponsor',
-      meta: row.subscribes ? 'Subscribing' : 'Exempt',
-      ref: row.sponsorNo,
+      subtitle: row.party.address || 'Member',
+      meta:
+        row.subscribes || row.party._count.sponsorships > 0 ? 'Owes sanththa' : 'Sanththa optional',
+      ref: row.memberNo,
       badge: null,
       page: 'Sanththa Register',
     }));
